@@ -1,0 +1,1 @@
+//! SMTP submit over rustls.

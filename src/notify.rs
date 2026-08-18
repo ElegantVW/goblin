@@ -1,0 +1,1 @@
+//! Best-effort notify sound.

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# goblin — thin launcher (never a prebuilt ELF in git)
+# Discovery: GOBLIN_BIN → ~/.local/lib/faeos/goblin → sibling tree
+set -euo pipefail
+
+USER_HOME="${HOME}"
+if [[ -n "${SUDO_USER:-}" ]]; then
+  USER_HOME="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6 || true)"
+  USER_HOME="${USER_HOME:-$HOME}"
+fi
+
+CANDIDATES=(
+  "${GOBLIN_BIN:-}"
+  "$USER_HOME/.local/lib/faeos/goblin"
+  /usr/local/lib/faeos/goblin
+  "$USER_HOME/goblin/target/release/goblin"
+  "${GOBLIN_ROOT:-}/target/release/goblin"
+)
+here="$(cd "$(dirname "$0")" && pwd)"
+if [[ -x "$here/../target/release/goblin" ]]; then
+  CANDIDATES+=("$here/../target/release/goblin")
+fi
+
+for c in "${CANDIDATES[@]}"; do
+  [[ -n "$c" && -x "$c" ]] || continue
+  exec "$c" "$@"
+done
+
+echo "goblin: engine not built yet." >&2
+echo "  build:  git clone git@github.com:ElegantVW/goblin.git ~/goblin" >&2
+echo "          cd ~/goblin && ./build.sh install" >&2
+exit 127

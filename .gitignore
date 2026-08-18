@@ -1,0 +1,7 @@
+/target/
+*.pem
+*.key
+.env
+.DS_Store
+*~
+.superpowers/
