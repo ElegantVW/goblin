@@ -860,6 +860,7 @@ dependencies = [
  "hostname",
  "keyring",
  "lettre",
+ "libc",
  "mail-parser",
  "ratatui",
  "rustls",
