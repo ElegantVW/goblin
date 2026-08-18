@@ -4,7 +4,7 @@ use crate::error::Error;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountFile {
@@ -156,10 +156,6 @@ impl AccountFile {
             .find(|a| a.name == self.default)
             .ok_or_else(|| Error::Config(format!("default account {:?} not found", self.default)))
     }
-}
-
-pub fn default_accounts_path() -> PathBuf {
-    crate::paths::accounts_file()
 }
 
 #[cfg(test)]

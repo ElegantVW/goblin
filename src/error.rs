@@ -9,7 +9,6 @@ pub enum Error {
     Config(String),
     Secret(String),
     Usage(String),
-    NotImplemented(&'static str),
     Io(io::Error),
     Json(serde_json::Error),
     Imap(String),
@@ -28,7 +27,6 @@ impl fmt::Display for Error {
             Error::Config(s) | Error::Secret(s) | Error::Usage(s) | Error::Imap(s) | Error::Smtp(s) => {
                 write!(f, "{s}")
             }
-            Error::NotImplemented(s) => write!(f, "{s} is not implemented"),
             Error::Io(e) => write!(f, "{e}"),
             Error::Json(e) => write!(f, "{e}"),
         }

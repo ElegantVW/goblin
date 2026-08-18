@@ -11,6 +11,7 @@ mod paths;
 mod secrets;
 mod smtp;
 mod store;
+mod tls;
 mod tui;
 
 use clap::{Parser, Subcommand};
@@ -117,6 +118,7 @@ pub enum AccountCmd {
 }
 
 fn main() -> ExitCode {
+    crate::tls::install_crypto();
     let args = Args::parse();
     let code = match run(args) {
         Ok(c) => c,
