@@ -111,10 +111,8 @@ fn cmd_account_add(preset: Option<&str>) -> Result<u8, Error> {
     let user = prompt("username / email", extract_addr(&from).as_deref())?;
 
     let (imap, smtp_ep) = if preset == Some("purelymail") {
-        (
-            Endpoint::purelymail_imap(&user),
-            Endpoint::purelymail_smtp(&user),
-        )
+        let p = config::purelymail_preset(&name, &from, &user);
+        (p.imap, p.smtp)
     } else {
         let imap_host = prompt("imap host", None)?;
         let imap_port = prompt("imap port", Some("993"))?
