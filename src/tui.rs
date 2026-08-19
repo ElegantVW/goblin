@@ -1,6 +1,9 @@
 //! House TUI: stacked fae_termart boxes + Runes. No ratatui. No Python.
 
-use crate::cli::{self, load_accounts_file, load_default_account, load_named_account, open_path};
+use crate::cli::{
+    self, load_accounts_file, load_default_account, load_named_account, open_path, save_account,
+};
+use crate::config;
 use crate::compose;
 use crate::error::Error;
 use crate::imap::{self, SyncOpts};
@@ -27,10 +30,39 @@ struct Draft {
     reply_to: Option<MailMeta>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NestField {
+    Name,
+    Display,
+    Email,
+    Password,
+    InHost,
+    InPort,
+    OutHost,
+    OutPort,
+}
+
+struct NestForm {
+    preset: Option<String>,
+    name: String,
+    display: String,
+    email: String,
+    password: String,
+    in_host: String,
+    in_port: String,
+    out_host: String,
+    out_port: String,
+    field: NestField,
+    confirm_quit: bool,
+    status: String,
+}
+
 enum Screen {
     List,
     Reader { scroll: usize, attach_sel: usize },
     Compose { draft: Draft, confirm_quit: bool },
+    NestPick { sel: usize },
+    NestForm { form: NestForm },
 }
 
 struct App {
@@ -82,6 +114,10 @@ pub fn run() -> Result<u8, Error> {
         query: String::new(),
         searching: false,
     };
+    if app.acc_names.is_empty() {
+        app.screen = Screen::NestPick { sel: 0 };
+        app.status = "pick a sky to join".into();
+    }
     app.reload();
     let result = event_loop(&mut app, fd);
     art::tui_cleanup();
@@ -105,6 +141,8 @@ fn handle_key(app: &mut App, key: &str) -> Result<bool, Error> {
         Screen::List => handle_list(app, key),
         Screen::Reader { .. } => handle_reader(app, key),
         Screen::Compose { .. } => handle_compose(app, key),
+        Screen::NestPick { .. } => handle_nest_pick(app, key),
+        Screen::NestForm { .. } => handle_nest_form(app, key),
     }
 }
 
@@ -190,8 +228,245 @@ fn handle_list(app: &mut App, key: &str) -> Result<bool, Error> {
             };
         }
         "r" | "R" => start_reply(app),
+        "N" => {
+            app.screen = Screen::NestPick { sel: 0 };
+        }
         _ => {}
     }
+    Ok(false)
+}
+
+fn sky_ids() -> Vec<String> {
+    let mut v: Vec<String> = config::NEST_PRESETS
+        .iter()
+        .map(|p| p.id.to_string())
+        .collect();
+    v.push("other".into());
+    v
+}
+
+fn handle_nest_pick(app: &mut App, key: &str) -> Result<bool, Error> {
+    let skies = sky_ids();
+    let Screen::NestPick { sel } = &mut app.screen else {
+        return Ok(false);
+    };
+    match key {
+        "q" | "ctrl-c" if app.acc_names.is_empty() => return Ok(true),
+        "esc" | "q" => {
+            if app.acc_names.is_empty() {
+                return Ok(true);
+            }
+            app.screen = Screen::List;
+        }
+        "j" | "down" => {
+            if *sel + 1 < skies.len() {
+                *sel += 1;
+            }
+        }
+        "k" | "up" => *sel = sel.saturating_sub(1),
+        "enter" | "o" => {
+            let id = skies
+                .get(*sel)
+                .cloned()
+                .unwrap_or_else(|| "purelymail".into());
+            let preset = if id == "other" { None } else { Some(id) };
+            app.screen = Screen::NestForm {
+                form: NestForm {
+                    preset,
+                    name: "work".into(),
+                    display: String::new(),
+                    email: String::new(),
+                    password: String::new(),
+                    in_host: String::new(),
+                    in_port: "993".into(),
+                    out_host: String::new(),
+                    out_port: "465".into(),
+                    field: NestField::Name,
+                    confirm_quit: false,
+                    status: String::new(),
+                },
+            };
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn nest_fields(other: bool) -> &'static [NestField] {
+    if other {
+        &[
+            NestField::Name,
+            NestField::Display,
+            NestField::Email,
+            NestField::Password,
+            NestField::InHost,
+            NestField::InPort,
+            NestField::OutHost,
+            NestField::OutPort,
+        ]
+    } else {
+        &[
+            NestField::Name,
+            NestField::Display,
+            NestField::Email,
+            NestField::Password,
+        ]
+    }
+}
+
+fn handle_nest_form(app: &mut App, key: &str) -> Result<bool, Error> {
+    let Screen::NestForm { form } = &mut app.screen else {
+        return Ok(false);
+    };
+    if form.confirm_quit {
+        if key == "y" || key == "Y" {
+            if app.acc_names.is_empty() {
+                app.screen = Screen::NestPick { sel: 0 };
+            } else {
+                app.screen = Screen::List;
+                app.status = "nest add abandoned".into();
+            }
+        } else {
+            form.confirm_quit = false;
+        }
+        return Ok(false);
+    }
+    let other = form.preset.is_none();
+    let fields = nest_fields(other);
+    match key {
+        "esc" => form.confirm_quit = true,
+        "ctrl-c" => return Ok(true),
+        "ctrl-s" => return commit_nest(app),
+        "tab" => {
+            let i = fields.iter().position(|f| *f == form.field).unwrap_or(0);
+            form.field = fields[(i + 1) % fields.len()];
+        }
+        "shift-tab" => {
+            let i = fields.iter().position(|f| *f == form.field).unwrap_or(0);
+            form.field = fields[(i + fields.len() - 1) % fields.len()];
+        }
+        "backspace" => nest_pop(form),
+        k if k.chars().count() == 1 && !k.starts_with("ctrl-") => {
+            nest_push(form, k.chars().next().unwrap());
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn nest_push(form: &mut NestForm, c: char) {
+    match form.field {
+        NestField::Name => form.name.push(c),
+        NestField::Display => form.display.push(c),
+        NestField::Email => form.email.push(c),
+        NestField::Password => form.password.push(c),
+        NestField::InHost => form.in_host.push(c),
+        NestField::InPort => form.in_port.push(c),
+        NestField::OutHost => form.out_host.push(c),
+        NestField::OutPort => form.out_port.push(c),
+    }
+}
+
+fn nest_pop(form: &mut NestForm) {
+    match form.field {
+        NestField::Name => {
+            form.name.pop();
+        }
+        NestField::Display => {
+            form.display.pop();
+        }
+        NestField::Email => {
+            form.email.pop();
+        }
+        NestField::Password => {
+            form.password.pop();
+        }
+        NestField::InHost => {
+            form.in_host.pop();
+        }
+        NestField::InPort => {
+            form.in_port.pop();
+        }
+        NestField::OutHost => {
+            form.out_host.pop();
+        }
+        NestField::OutPort => {
+            form.out_port.pop();
+        }
+    }
+}
+
+pub fn mask_secret(s: &str) -> String {
+    "•".repeat(s.chars().count())
+}
+
+fn commit_nest(app: &mut App) -> Result<bool, Error> {
+    let Screen::NestForm { form } = &app.screen else {
+        return Ok(false);
+    };
+    if form.email.trim().is_empty() {
+        if let Screen::NestForm { form } = &mut app.screen {
+            form.status = "need an email address".into();
+        }
+        return Ok(false);
+    }
+    if form.password.is_empty() {
+        if let Screen::NestForm { form } = &mut app.screen {
+            form.status = "need a password".into();
+        }
+        return Ok(false);
+    }
+    let name = if form.name.trim().is_empty() {
+        "work".into()
+    } else {
+        form.name.trim().to_string()
+    };
+    let email = form.email.trim().to_string();
+    let from = if form.display.trim().is_empty() {
+        email.clone()
+    } else {
+        format!("{} <{}>", form.display.trim(), email)
+    };
+    let acc = if let Some(id) = form.preset.as_deref() {
+        config::apply_preset(id, &name, &from, &email)?
+    } else {
+        let imap_port: u16 = form
+            .in_port
+            .parse()
+            .map_err(|_| Error::say("bad incoming port", "use 993"))?;
+        let smtp_port: u16 = form
+            .out_port
+            .parse()
+            .map_err(|_| Error::say("bad outgoing port", "use 465 or 587"))?;
+        crate::tls::imap_mode(imap_port)?;
+        crate::tls::smtp_mode(smtp_port)?;
+        crate::config::Account {
+            name: name.clone(),
+            from,
+            imap: crate::config::Endpoint {
+                host: form.in_host.trim().to_string(),
+                port: imap_port,
+                user: email.clone(),
+            },
+            smtp: crate::config::Endpoint {
+                host: form.out_host.trim().to_string(),
+                port: smtp_port,
+                user: email,
+            },
+        }
+    };
+    crate::tls::imap_mode(acc.imap.port)?;
+    crate::tls::smtp_mode(acc.smtp.port)?;
+    let password = form.password.clone();
+    save_account(acc, &password, true)?;
+    let names = load_accounts_file()
+        .map(|f| f.accounts.into_iter().map(|a| a.name).collect())
+        .unwrap_or_default();
+    app.acc_names = names;
+    app.acc_name = name.clone();
+    app.screen = Screen::List;
+    app.status = format!("nest saved — {name}");
+    app.reload();
     Ok(false)
 }
 
@@ -406,6 +681,7 @@ fn current_mail(app: &App) -> Option<MailMeta> {
     match &app.screen {
         Screen::Reader { .. } | Screen::List => visible(app).get(app.sel).map(|(_, m)| m.clone()),
         Screen::Compose { draft, .. } => draft.reply_to.clone(),
+        Screen::NestPick { .. } | Screen::NestForm { .. } => None,
     }
 }
 
@@ -636,6 +912,8 @@ fn render(app: &App) -> String {
             draft,
             confirm_quit,
         } => render_compose(app, tw, th, draft, *confirm_quit),
+        Screen::NestPick { sel } => render_nest_pick(app, tw, th, *sel),
+        Screen::NestForm { form } => render_nest_form(app, tw, th, form),
     }
 }
 
@@ -660,7 +938,7 @@ fn render_list(app: &App, tw: usize, th: usize) -> String {
         searching = searching
     );
     let runes = art::box_frame(
-        &["j/k move · / search · [] account · enter open · s sync · m read · t trash · c compose · r reply · 1/2/3 box · q quit".into()],
+        &["j/k move · / hunt · [] nest · N nest add · enter open · s steal · c compose · r reply · 1/2/3 box · q quit".into()],
         "Runes",
         "",
         tw,
@@ -824,4 +1102,114 @@ fn render_compose(app: &App, tw: usize, th: usize, draft: &Draft, confirm_quit: 
     }
     let body = art::box_frame(&body_rows, "letter", "", tw);
     format!("{head}\n{body}\n{runes}")
+}
+
+fn render_nest_pick(app: &App, tw: usize, _th: usize, sel: usize) -> String {
+    let skies = sky_ids();
+    let mut rows = Vec::new();
+    for (i, id) in skies.iter().enumerate() {
+        let mark = if i == sel { "✦" } else { " " };
+        let line = format!(" {mark}  {id}");
+        if i == sel {
+            rows.push(art::paint(&line, &[art::BOLD, art::BLUSH]));
+        } else {
+            rows.push(art::paint(&line, &[art::SILVER]));
+        }
+    }
+    let sub = if app.acc_names.is_empty() {
+        "pick a sky to join"
+    } else {
+        "add another nest"
+    };
+    let head = art::box_frame(&rows, "Goblin", sub, tw);
+    let runes = art::box_frame(
+        &["j/k move · enter choose · esc back".into()],
+        "Runes",
+        "",
+        tw,
+    );
+    format!("{head}\n{runes}")
+}
+
+fn render_nest_form(_app: &App, tw: usize, _th: usize, form: &NestForm) -> String {
+    let sky = form.preset.as_deref().unwrap_or("other");
+    let app_pw = form
+        .preset
+        .as_deref()
+        .and_then(config::find_preset)
+        .map(|p| p.wants_app_password)
+        .unwrap_or(false);
+    let mut sub = format!("sky: {sky}");
+    if app_pw {
+        sub.push_str(" · app password if your mail house asks for one");
+    }
+    if form.confirm_quit {
+        sub = "abandon this nest? y / any other key = stay".into();
+    } else if !form.status.is_empty() {
+        sub = format!("{sub} · {}", form.status);
+    }
+    let row = |on: bool, label: &str, val: &str| {
+        let line = format!("{label:<14} {val}");
+        if on {
+            art::paint(&line, &[art::BOLD, art::BLUSH])
+        } else {
+            art::paint(&line, &[art::SILVER])
+        }
+    };
+    let mut rows = vec![
+        row(form.field == NestField::Name, "nest name", &form.name),
+        row(form.field == NestField::Display, "your name", &form.display),
+        row(form.field == NestField::Email, "email", &form.email),
+        row(
+            form.field == NestField::Password,
+            "password",
+            &mask_secret(&form.password),
+        ),
+    ];
+    if form.preset.is_none() {
+        rows.push(row(
+            form.field == NestField::InHost,
+            "incoming sky",
+            &form.in_host,
+        ));
+        rows.push(row(
+            form.field == NestField::InPort,
+            "incoming port",
+            &form.in_port,
+        ));
+        rows.push(row(
+            form.field == NestField::OutHost,
+            "outgoing sky",
+            &form.out_host,
+        ));
+        rows.push(row(
+            form.field == NestField::OutPort,
+            "outgoing port",
+            &form.out_port,
+        ));
+    }
+    let head = art::box_frame(&rows, "Goblin", &sub, tw);
+    let runes = art::box_frame(
+        &["tab field · type · ctrl-s save · esc abandon".into()],
+        "Runes",
+        "",
+        tw,
+    );
+    format!("{head}\n{runes}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_render_is_bullets_secret_stays() {
+        let secret = "hunter2";
+        let shown = mask_secret(secret);
+        assert_eq!(shown.chars().count(), secret.chars().count());
+        assert!(!shown.contains('h'));
+        assert!(!shown.contains('2'));
+        assert!(shown.chars().all(|c| c == '•'));
+        assert_eq!(secret, "hunter2");
+    }
 }

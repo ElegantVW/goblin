@@ -168,7 +168,18 @@ fn cmd_account_add(preset: Option<&str>) -> Result<u8, Error> {
     if password.is_empty() {
         return Err(Error::say("empty password", "try nest add again"));
     }
-    save_account(acc, &password)
+    let n = acc.name.clone();
+    save_account(acc, &password, file_is_empty())?;
+    println!("saved nest {n}");
+    Ok(0)
+}
+
+fn file_is_empty() -> bool {
+    let path = writable_accounts_path();
+    !path.exists()
+        || config::load_accounts(&path)
+            .map(|f| f.accounts.is_empty())
+            .unwrap_or(true)
 }
 
 fn pick_nest() -> Result<String, Error> {
@@ -195,7 +206,7 @@ fn pick_nest() -> Result<String, Error> {
     ))
 }
 
-fn save_account(acc: Account, password: &str) -> Result<u8, Error> {
+pub fn save_account(acc: Account, password: &str, make_default: bool) -> Result<u8, Error> {
     let path = writable_accounts_path();
     let mut file = if path.exists() {
         config::load_accounts(&path).unwrap_or(AccountFile {
@@ -209,12 +220,11 @@ fn save_account(acc: Account, password: &str) -> Result<u8, Error> {
         }
     };
     file.upsert(acc.clone());
-    if file.default.is_empty() {
+    if make_default || file.default.is_empty() {
         file.default = acc.name.clone();
     }
     config::save_accounts(&path, &file)?;
     secrets::store_password(&secret_id(&acc), password)?;
-    println!("saved {} ({})", acc.name, path.display());
     Ok(0)
 }
 
@@ -248,7 +258,8 @@ fn cmd_import_aerc(file: Option<PathBuf>) -> Result<u8, Error> {
     if password.is_empty() {
         password = read_password("password: ")?;
     }
-    save_account(acc, &password)?;
+    save_account(acc, &password, file_is_empty())?;
+    println!("imported nest");
     eprintln!("note: password stored in the keyring/secrets file, not in accounts.json");
     Ok(0)
 }
