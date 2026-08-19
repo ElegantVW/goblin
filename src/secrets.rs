@@ -1,4 +1,4 @@
-//! OS keyring first, then 0600 secrets file.
+//! Optional OS keyring (`keyring` feature), then 0600 secrets file.
 
 use crate::config::check_secret_mode;
 use crate::error::Error;
@@ -7,17 +7,24 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+#[cfg(feature = "keyring")]
 const SERVICE: &str = "goblin";
 
 pub fn store_password(id: &str, password: &str) -> Result<(), Error> {
-    if try_keyring_set(id, password).is_ok() {
-        return Ok(());
+    #[cfg(feature = "keyring")]
+    {
+        if try_keyring_set(id, password).is_ok() {
+            return Ok(());
+        }
     }
     store_password_in_file(&paths::secrets_file(), id, password)
 }
 
 pub fn delete_password(id: &str) -> Result<(), Error> {
-    let _ = try_keyring_delete(id);
+    #[cfg(feature = "keyring")]
+    {
+        let _ = try_keyring_delete(id);
+    }
     let path = paths::secrets_file();
     if path.is_file() {
         delete_password_from_file(&path, id)?;
@@ -25,6 +32,7 @@ pub fn delete_password(id: &str) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(feature = "keyring")]
 fn try_keyring_delete(id: &str) -> Result<(), Error> {
     let e = keyring::Entry::new(SERVICE, id).map_err(|e| Error::Secret(format!("keyring: {e}")))?;
     e.delete_credential()
@@ -32,20 +40,25 @@ fn try_keyring_delete(id: &str) -> Result<(), Error> {
 }
 
 pub fn load_password(id: &str) -> Result<String, Error> {
-    if let Ok(p) = try_keyring_get(id) {
-        if !p.is_empty() {
-            return Ok(p);
+    #[cfg(feature = "keyring")]
+    {
+        if let Ok(p) = try_keyring_get(id) {
+            if !p.is_empty() {
+                return Ok(p);
+            }
         }
     }
     load_password_from_file(&paths::secrets_file(), id)
 }
 
+#[cfg(feature = "keyring")]
 fn try_keyring_set(id: &str, password: &str) -> Result<(), Error> {
     let e = keyring::Entry::new(SERVICE, id).map_err(|e| Error::Secret(format!("keyring: {e}")))?;
     e.set_password(password)
         .map_err(|e| Error::Secret(format!("keyring: {e}")))
 }
 
+#[cfg(feature = "keyring")]
 fn try_keyring_get(id: &str) -> Result<String, Error> {
     let e = keyring::Entry::new(SERVICE, id).map_err(|e| Error::Secret(format!("keyring: {e}")))?;
     e.get_password()
