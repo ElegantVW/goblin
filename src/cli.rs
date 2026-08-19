@@ -861,32 +861,15 @@ fn read_password(prompt: &str) -> Result<String, Error> {
     if !stdin_is_tty() {
         return Err(Error::Usage("password prompt needs a tty".into()));
     }
-    #[cfg(unix)]
-    {
-        unsafe {
-            let fd = libc::STDIN_FILENO;
-            let mut old: libc::termios = std::mem::zeroed();
-            if libc::tcgetattr(fd, &mut old) != 0 {
-                return Err(Error::Usage("password prompt needs a tty".into()));
-            }
-            let mut new = old;
-            new.c_lflag &= !libc::ECHO;
-            libc::tcsetattr(fd, libc::TCSANOW, &new);
-            let mut line = String::new();
-            let res = io::stdin().lock().read_line(&mut line);
-            libc::tcsetattr(fd, libc::TCSANOW, &old);
-            eprintln!();
-            res?;
-            Ok(line.trim_end_matches(['\n', '\r']).to_string())
+    let line = crate::termart::read_secret_line().map_err(|e| {
+        if e.kind() == io::ErrorKind::Unsupported {
+            Error::Usage("password prompt needs a tty".into())
+        } else {
+            e.into()
         }
-    }
-    #[cfg(not(unix))]
-    {
-        // Windows: echo stays on this gate (no extra crates). CLI still works.
-        let mut line = String::new();
-        io::stdin().lock().read_line(&mut line)?;
-        Ok(line.trim_end_matches(['\n', '\r']).to_string())
-    }
+    })?;
+    eprintln!();
+    Ok(line)
 }
 
 #[cfg(test)]

@@ -1,7 +1,5 @@
 //! House TUI: stacked fae_termart boxes + Runes. No ratatui. No Python.
 
-#![cfg_attr(not(unix), allow(dead_code))]
-
 use crate::cli::{
     load_accounts_file, load_default_account, load_named_account, open_path, remove_account,
     replace_account, save_account,
@@ -14,8 +12,6 @@ use crate::smtp;
 use crate::store::{MailBox, MailMeta, Store};
 use crate::termart as art;
 use crate::{notify, paths};
-#[cfg(unix)]
-use std::io::IsTerminal;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Field {
@@ -92,135 +88,105 @@ struct App {
 }
 
 pub fn run() -> Result<u8, Error> {
-    #[cfg(not(unix))]
-    {
-        Err(Error::say(
-            "the horde TUI needs a unix tty for now",
-            "goblin peek   or   goblin steal",
-        ))
+    if !art::tui_available() {
+        return crate::cli::dispatch(crate::Cmd::Peek {
+            box_name: "unread".into(),
+            plain: false,
+        });
     }
-    #[cfg(unix)]
-    {
-        if !std::io::stdout().is_terminal() {
-            return crate::cli::dispatch(crate::Cmd::Peek {
-                box_name: "unread".into(),
-                plain: false,
-            });
-        }
-        art::set_force_unicode(true);
-        let Some(fd) = art::tui_open_tty() else {
-            return crate::cli::dispatch(crate::Cmd::Peek {
-                box_name: "unread".into(),
-                plain: false,
-            });
-        };
-        art::tui_begin(fd, "goblin");
-        let (acc_name, acc_names) = match load_accounts_file() {
-            Ok(f) => (
-                f.default.clone(),
-                f.accounts.into_iter().map(|a| a.name).collect(),
-            ),
-            Err(_) => ("goblin".into(), Vec::new()),
-        };
-        let store = Store::default_store();
-        let _ = store.ensure();
-        let mut app = App {
-            store,
-            box_name: MailBox::Unread,
-            sel: 0,
-            status: "welcome, master — the goblin guards your mail".into(),
-            screen: Screen::List,
-            mails: Vec::new(),
-            acc_name,
-            acc_names,
-            query: String::new(),
-            searching: false,
-        };
-        if app.acc_names.is_empty() {
-            app.screen = Screen::NestPick { sel: 0 };
-            app.status = "summon a goblin — which sky do they watch?".into();
-        }
-        app.reload();
-        let result = event_loop(&mut app, fd);
-        art::tui_cleanup();
-        result
+    art::set_force_unicode(true);
+    art::tui_begin("goblin");
+    let (acc_name, acc_names) = match load_accounts_file() {
+        Ok(f) => (
+            f.default.clone(),
+            f.accounts.into_iter().map(|a| a.name).collect(),
+        ),
+        Err(_) => ("goblin".into(), Vec::new()),
+    };
+    let store = Store::default_store();
+    let _ = store.ensure();
+    let mut app = App {
+        store,
+        box_name: MailBox::Unread,
+        sel: 0,
+        status: "welcome, master — the goblin guards your mail".into(),
+        screen: Screen::List,
+        mails: Vec::new(),
+        acc_name,
+        acc_names,
+        query: String::new(),
+        searching: false,
+    };
+    if app.acc_names.is_empty() {
+        app.screen = Screen::NestPick { sel: 0 };
+        app.status = "summon a goblin — which sky do they watch?".into();
     }
+    app.reload();
+    let result = event_loop(&mut app);
+    art::tui_cleanup();
+    result
 }
 
 pub fn run_mend(name: Option<String>) -> Result<u8, Error> {
-    #[cfg(not(unix))]
-    {
-        let _ = name;
-        Err(Error::say(
-            "the horde TUI needs a unix tty for now",
-            "goblin peek   or   goblin steal",
-        ))
+    if !art::tui_available() {
+        return Err(Error::say("mending needs a real terminal", "run: goblin"));
     }
-    #[cfg(unix)]
-    {
-        if !std::io::stdout().is_terminal() {
-            return Err(Error::say("mending needs a real terminal", "run: goblin"));
+    art::set_force_unicode(true);
+    art::tui_begin("goblin");
+    let (acc_name, acc_names) = match load_accounts_file() {
+        Ok(f) => (
+            f.default.clone(),
+            f.accounts.into_iter().map(|a| a.name).collect(),
+        ),
+        Err(_) => ("goblin".into(), Vec::new()),
+    };
+    let store = Store::default_store();
+    let _ = store.ensure();
+    let mut app = App {
+        store,
+        box_name: MailBox::Unread,
+        sel: 0,
+        status: "mend a goblin".into(),
+        screen: Screen::List,
+        mails: Vec::new(),
+        acc_name,
+        acc_names,
+        query: String::new(),
+        searching: false,
+    };
+    app.reload();
+    if let Some(n) = name {
+        if let Some(form) = form_from_name(&n) {
+            app.screen = Screen::NestForm { form };
+        } else {
+            art::tui_cleanup();
+            return Err(Error::say(format!("no goblin named {n:?}"), "goblin who"));
         }
-        art::set_force_unicode(true);
-        let Some(fd) = art::tui_open_tty() else {
-            return Err(Error::say("mending needs a real terminal", "run: goblin"));
-        };
-        art::tui_begin(fd, "goblin");
-        let (acc_name, acc_names) = match load_accounts_file() {
-            Ok(f) => (
-                f.default.clone(),
-                f.accounts.into_iter().map(|a| a.name).collect(),
-            ),
-            Err(_) => ("goblin".into(), Vec::new()),
-        };
-        let store = Store::default_store();
-        let _ = store.ensure();
-        let mut app = App {
-            store,
-            box_name: MailBox::Unread,
-            sel: 0,
-            status: "mend a goblin".into(),
-            screen: Screen::List,
-            mails: Vec::new(),
-            acc_name,
-            acc_names,
-            query: String::new(),
-            searching: false,
-        };
-        app.reload();
-        if let Some(n) = name {
-            if let Some(form) = form_from_name(&n) {
-                app.screen = Screen::NestForm { form };
-            } else {
-                art::tui_cleanup();
-                return Err(Error::say(format!("no goblin named {n:?}"), "goblin who"));
-            }
-        } else if app.acc_names.len() == 1 {
-            if let Some(form) = form_from_name(&app.acc_names[0]) {
-                app.screen = Screen::NestForm { form };
-            }
-        } else if !app.acc_names.is_empty() {
-            let sel = app
-                .acc_names
-                .iter()
-                .position(|n| n == &app.acc_name)
-                .unwrap_or(0);
-            app.screen = Screen::HordePick {
-                sel,
-                why: HordeWhy::Mend,
-            };
+    } else if app.acc_names.len() == 1 {
+        if let Some(form) = form_from_name(&app.acc_names[0]) {
+            app.screen = Screen::NestForm { form };
         }
-        let result = event_loop(&mut app, fd);
-        art::tui_cleanup();
-        result
+    } else if !app.acc_names.is_empty() {
+        let sel = app
+            .acc_names
+            .iter()
+            .position(|n| n == &app.acc_name)
+            .unwrap_or(0);
+        app.screen = Screen::HordePick {
+            sel,
+            why: HordeWhy::Mend,
+        };
     }
+    let result = event_loop(&mut app);
+    art::tui_cleanup();
+    result
 }
 
-fn event_loop(app: &mut App, fd: i32) -> Result<u8, Error> {
+fn event_loop(app: &mut App) -> Result<u8, Error> {
     loop {
         let frame = render(app);
-        art::paint_frame(fd, &frame);
-        let key = art::tui_read_key(fd, None);
+        art::paint_frame(&frame);
+        let key = art::tui_read_key(None);
         if handle_key(app, &key)? {
             break;
         }

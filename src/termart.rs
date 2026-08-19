@@ -1,9 +1,10 @@
 //! House chrome — port of faeos `fae_termart` box / tui_* (no Python at runtime).
 
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::{cursor, execute, terminal};
+use std::io::{self, IsTerminal, Write};
 use std::sync::Mutex;
-
-#[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::time::Duration;
 
 pub const RESET: &str = "\x1b[0m";
 pub const BOLD: &str = "\x1b[1m";
@@ -19,27 +20,14 @@ pub const OK: &str = "\x1b[38;5;78m";
 pub const WARN: &str = "\x1b[38;5;214m";
 pub const ERR: &str = "\x1b[38;5;197m";
 
-#[cfg(unix)]
-const ENTER_ALT: &str = "\x1b[?1049h\x1b[?25l";
-#[cfg(unix)]
-const LEAVE_ALT: &str = "\x1b[?25h\x1b[?7h\x1b[?1049l";
-#[cfg(unix)]
-const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
-#[cfg(unix)]
 const TUI_HYGIENE: &str =
     "\x1b[0m\x1b[?25h\x1b[?7h\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 
 static FORCE_COLOR: Mutex<bool> = Mutex::new(false);
 static FORCE_UNICODE: Mutex<Option<bool>> = Mutex::new(None);
-
-#[cfg(unix)]
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 
-#[cfg(unix)]
 struct Session {
-    fd: RawFd,
-    owned: Option<OwnedFd>,
-    old: libc::termios,
     alt: bool,
 }
 
@@ -52,8 +40,7 @@ pub fn set_force_unicode(on: bool) {
 }
 
 pub fn stdout_is_tty() -> bool {
-    use std::io::IsTerminal;
-    std::io::stdout().is_terminal() || std::io::stderr().is_terminal()
+    io::stdout().is_terminal() || io::stderr().is_terminal()
 }
 
 pub fn color_ok() -> bool {
@@ -380,55 +367,18 @@ pub fn line_count(frame: &str) -> usize {
     }
 }
 
-#[cfg(unix)]
-#[repr(C)]
-struct Winsize {
-    ws_row: u16,
-    ws_col: u16,
-    ws_xpixel: u16,
-    ws_ypixel: u16,
-}
-
-#[cfg(unix)]
-pub fn winsize(fd: Option<RawFd>) -> (u16, u16) {
-    let mut candidates: Vec<RawFd> = Vec::new();
-    if let Some(fd) = fd {
-        candidates.push(fd);
-    }
-    if let Ok(s) = SESSION.lock() {
-        if let Some(sess) = s.as_ref() {
-            candidates.push(sess.fd);
-        }
-    }
-    candidates.extend_from_slice(&[1, 0]);
-    for fd in candidates {
-        let mut ws = Winsize {
-            ws_row: 0,
-            ws_col: 0,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        let rc = unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) };
-        if rc == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
-            return (ws.ws_col, ws.ws_row);
-        }
-    }
-    (80, 24)
-}
-
-#[cfg(not(unix))]
-fn winsize(_fd: Option<i32>) -> (u16, u16) {
-    (80, 24)
+pub fn winsize() -> (u16, u16) {
+    terminal::size().unwrap_or((80, 24))
 }
 
 pub fn term_width() -> usize {
-    let (cols, _) = winsize(None);
+    let (cols, _) = winsize();
     let usable = (cols as usize).saturating_sub(1).max(1);
     usable.max(36)
 }
 
 pub fn term_height() -> usize {
-    let (_, rows) = winsize(None);
+    let (_, rows) = winsize();
     (rows as usize).max(12)
 }
 
@@ -487,110 +437,6 @@ pub fn decode_byte(ch: u8) -> String {
 }
 
 #[cfg(unix)]
-fn poll_in(fd: RawFd, timeout_ms: i32) -> bool {
-    let mut pfd = libc::pollfd {
-        fd,
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    unsafe { libc::poll(&mut pfd, 1, timeout_ms) > 0 }
-}
-
-#[cfg(unix)]
-fn read_byte(fd: RawFd) -> Option<u8> {
-    let mut buf = [0u8; 1];
-    let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut _, 1) };
-    if n <= 0 {
-        None
-    } else {
-        Some(buf[0])
-    }
-}
-
-#[cfg(unix)]
-pub fn tui_open_tty() -> Option<RawFd> {
-    let path = std::ffi::CString::new("/dev/tty").ok()?;
-    let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
-    if fd >= 0 {
-        return Some(fd);
-    }
-    for cand in [0, 1, 2] {
-        if unsafe { libc::isatty(cand) } == 1 {
-            let dup = unsafe { libc::dup(cand) };
-            if dup >= 0 {
-                return Some(dup);
-            }
-        }
-    }
-    None
-}
-
-#[cfg(not(unix))]
-pub fn tui_open_tty() -> Option<i32> {
-    None
-}
-
-#[cfg(unix)]
-fn set_cbreak(fd: RawFd) -> Result<libc::termios, ()> {
-    let mut old = unsafe { std::mem::zeroed::<libc::termios>() };
-    if unsafe { libc::tcgetattr(fd, &mut old) } != 0 {
-        return Err(());
-    }
-    let mut new = old;
-    new.c_iflag &= !(libc::IGNBRK
-        | libc::BRKINT
-        | libc::PARMRK
-        | libc::ISTRIP
-        | libc::INLCR
-        | libc::IGNCR
-        | libc::ICRNL
-        | libc::IXON);
-    new.c_oflag |= libc::OPOST | libc::ONLCR;
-    new.c_cflag &= !libc::CSIZE;
-    new.c_cflag |= libc::CS8;
-    new.c_lflag &= !(libc::ECHO | libc::ECHONL | libc::ICANON | libc::ISIG | libc::IEXTEN);
-    new.c_cc[libc::VMIN] = 1;
-    new.c_cc[libc::VTIME] = 0;
-    if unsafe { libc::tcsetattr(fd, libc::TCSADRAIN, &new) } != 0 {
-        return Err(());
-    }
-    Ok(old)
-}
-
-#[cfg(unix)]
-fn write_raw(fd: RawFd, text: &str) {
-    let data = text.as_bytes();
-    let mut off = 0;
-    while off < data.len() {
-        let n = unsafe { libc::write(fd, data[off..].as_ptr() as *const _, data.len() - off) };
-        if n <= 0 {
-            break;
-        }
-        off += n as usize;
-    }
-}
-
-#[cfg(unix)]
-pub fn paint_frame(fd: RawFd, body: &str) {
-    let prefix = "\x1b[H\x1b[2J\x1b[?7l";
-    write_raw(fd, prefix);
-    let mut body = body.to_string();
-    if !body.ends_with('\n') {
-        let lines = body.matches('\n').count() + 1;
-        if lines < term_height() {
-            body.push('\n');
-        }
-    }
-    body.push_str(RESET);
-    body.push_str("\x1b[?7h");
-    let _ = prefix;
-    write_raw(fd, &body);
-}
-
-#[cfg(not(unix))]
-pub fn paint_frame(_fd: i32, _body: &str) {}
-
-#[cfg(unix)]
 fn pixie_screen_hold(on: bool, name: &str) {
     let bin = directories::BaseDirs::new()
         .map(|b| b.home_dir().join("bin").join("pixie-screen"))
@@ -618,158 +464,229 @@ fn pixie_screen_hold(on: bool, name: &str) {
     }
 }
 
-#[cfg(unix)]
-pub fn tui_begin(fd: RawFd, hold_name: &str) {
-    set_force_color(true);
-    let old = set_cbreak(fd).unwrap_or_else(|_| unsafe { std::mem::zeroed() });
-    pixie_screen_hold(true, hold_name);
-    write_raw(fd, ENTER_ALT);
-    let owned = if fd > 2 {
-        Some(unsafe { OwnedFd::from_raw_fd(fd) })
-    } else {
-        None
-    };
-    *SESSION.lock().unwrap() = Some(Session {
-        fd: owned.as_ref().map(|o| o.as_raw_fd()).unwrap_or(fd),
-        owned,
-        old,
-        alt: true,
-    });
+#[cfg(not(unix))]
+fn pixie_screen_hold(_on: bool, _name: &str) {}
+
+pub fn tui_available() -> bool {
+    io::stdout().is_terminal()
 }
 
-#[cfg(not(unix))]
-pub fn tui_begin(_fd: i32, _hold_name: &str) {}
+pub fn paint_frame(body: &str) {
+    let mut out = io::stdout();
+    let _ = out.write_all(b"\x1b[H\x1b[2J\x1b[?7l");
+    let mut body = body.to_string();
+    if !body.ends_with('\n') {
+        let lines = body.matches('\n').count() + 1;
+        if lines < term_height() {
+            body.push('\n');
+        }
+    }
+    body.push_str(RESET);
+    body.push_str("\x1b[?7h");
+    let _ = out.write_all(body.as_bytes());
+    let _ = out.flush();
+}
 
-#[cfg(unix)]
+pub fn tui_begin(hold_name: &str) {
+    set_force_color(true);
+    pixie_screen_hold(true, hold_name);
+    let _ = terminal::enable_raw_mode();
+    let mut out = io::stdout();
+    let _ = execute!(out, terminal::EnterAlternateScreen, cursor::Hide);
+    *SESSION.lock().unwrap() = Some(Session { alt: true });
+}
+
 pub fn tui_cleanup() {
     let mut g = SESSION.lock().unwrap();
     let Some(sess) = g.take() else {
         return;
     };
-    unsafe {
-        libc::tcsetattr(sess.fd, libc::TCSADRAIN, &sess.old);
-    }
+    let mut out = io::stdout();
     if sess.alt {
-        write_raw(sess.fd, LEAVE_ALT);
+        let _ = execute!(out, terminal::LeaveAlternateScreen, cursor::Show);
     }
-    write_raw(sess.fd, TUI_HYGIENE);
-    let _ = MOUSE_OFF;
+    let _ = out.write_all(TUI_HYGIENE.as_bytes());
+    let _ = out.flush();
+    let _ = terminal::disable_raw_mode();
     pixie_screen_hold(false, "goblin");
     set_force_color(false);
-    drop(sess.owned);
 }
 
-#[cfg(not(unix))]
-pub fn tui_cleanup() {}
-
-#[cfg(unix)]
-pub fn tui_fd() -> Option<RawFd> {
-    SESSION.lock().unwrap().as_ref().map(|s| s.fd)
-}
-
-#[cfg(unix)]
-pub fn tui_read_key(fd: RawFd, timeout_ms: Option<i32>) -> String {
-    if let Some(ms) = timeout_ms {
-        if !poll_in(fd, ms) {
-            return String::new();
-        }
+fn map_key_event(ev: KeyEvent) -> String {
+    if ev.kind == KeyEventKind::Release {
+        return String::new();
     }
-    let Some(ch) = read_byte(fd) else {
-        return "esc".into();
-    };
-    if ch == 0x1b {
-        if !poll_in(fd, 50) {
-            return "esc".into();
+    match ev.code {
+        KeyCode::Enter => "enter".into(),
+        KeyCode::Esc => "esc".into(),
+        KeyCode::Backspace => "backspace".into(),
+        KeyCode::Tab => {
+            if ev.modifiers.contains(KeyModifiers::SHIFT) {
+                "shift-tab".into()
+            } else {
+                "tab".into()
+            }
         }
-        let Some(n1) = read_byte(fd) else {
-            return "esc".into();
-        };
-        if n1 == b'[' {
-            let mut seq = Vec::new();
-            loop {
-                if !poll_in(fd, 50) {
-                    break;
-                }
-                let Some(b) = read_byte(fd) else {
-                    break;
-                };
-                seq.push(b);
-                if b >= 0x40 {
-                    break;
+        KeyCode::BackTab => "shift-tab".into(),
+        KeyCode::Up => "up".into(),
+        KeyCode::Down => "down".into(),
+        KeyCode::Left => "left".into(),
+        KeyCode::Right => "right".into(),
+        KeyCode::PageUp => "pgup".into(),
+        KeyCode::PageDown => "pgdn".into(),
+        KeyCode::Home => "home".into(),
+        KeyCode::End => "end".into(),
+        KeyCode::Delete => "delete".into(),
+        KeyCode::Char(c) if ev.modifiers.contains(KeyModifiers::CONTROL) => {
+            match c.to_ascii_lowercase() {
+                'c' => "ctrl-c".into(),
+                's' => "ctrl-s".into(),
+                'u' => "ctrl-u".into(),
+                'a' => "ctrl-a".into(),
+                'e' => "ctrl-e".into(),
+                'r' => "ctrl-r".into(),
+                'w' => "ctrl-w".into(),
+                'p' => "ctrl-p".into(),
+                'l' => "ctrl-l".into(),
+                'd' => "ctrl-d".into(),
+                other => format!("ctrl-{other}"),
+            }
+        }
+        KeyCode::Char(' ') => "space".into(),
+        KeyCode::Char(c) => c.to_string(),
+        _ => String::new(),
+    }
+}
+
+pub fn tui_read_key(timeout_ms: Option<i32>) -> String {
+    loop {
+        if let Some(ms) = timeout_ms {
+            if ms >= 0 {
+                match event::poll(Duration::from_millis(ms as u64)) {
+                    Ok(true) => {}
+                    _ => return String::new(),
                 }
             }
-            let s = String::from_utf8_lossy(&seq).into_owned();
-            return decode_csi(&s);
         }
-        if n1 == b'O' {
-            if poll_in(fd, 50) {
-                if let Some(o) = read_byte(fd) {
-                    return match o {
-                        b'A' => "up".into(),
-                        b'B' => "down".into(),
-                        b'C' => "right".into(),
-                        b'D' => "left".into(),
-                        _ => "esc".into(),
-                    };
+        match event::read() {
+            Ok(Event::Key(ev)) => {
+                let key = map_key_event(ev);
+                if key.is_empty() {
+                    if timeout_ms.is_some() {
+                        return String::new();
+                    }
+                    continue;
+                }
+                return key;
+            }
+            Ok(Event::Resize(_, _)) => return String::new(),
+            Ok(_) => {
+                if timeout_ms.is_some() {
+                    return String::new();
                 }
             }
-            return "esc".into();
+            Err(_) => return "esc".into(),
         }
-        return "esc".into();
     }
-    decode_byte(ch)
 }
 
-#[cfg(not(unix))]
-pub fn tui_read_key(_fd: i32, _timeout_ms: Option<i32>) -> String {
-    String::new()
-}
-
-#[cfg(unix)]
 pub fn tui_suspend() {
-    if let Some(sess) = SESSION.lock().unwrap().as_ref() {
-        unsafe {
-            libc::tcsetattr(sess.fd, libc::TCSADRAIN, &sess.old);
-        }
-        write_raw(sess.fd, LEAVE_ALT);
-        write_raw(sess.fd, TUI_HYGIENE);
+    if SESSION.lock().unwrap().is_none() {
+        return;
     }
+    let mut out = io::stdout();
+    let _ = execute!(out, terminal::LeaveAlternateScreen, cursor::Show);
+    let _ = out.write_all(TUI_HYGIENE.as_bytes());
+    let _ = out.flush();
+    let _ = terminal::disable_raw_mode();
 }
 
-#[cfg(unix)]
 pub fn tui_resume() {
-    if let Some(sess) = SESSION.lock().unwrap().as_ref() {
-        let _ = set_cbreak(sess.fd);
-        write_raw(sess.fd, ENTER_ALT);
-        set_force_color(true);
+    if SESSION.lock().unwrap().is_none() {
+        return;
     }
+    let _ = terminal::enable_raw_mode();
+    let mut out = io::stdout();
+    let _ = execute!(out, terminal::EnterAlternateScreen, cursor::Hide);
+    set_force_color(true);
+}
+
+/// Read one secret line with echo off. Caller must already have a tty.
+pub fn read_secret_line() -> io::Result<String> {
+    if !io::stdin().is_terminal() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "password prompt needs a tty",
+        ));
+    }
+    terminal::enable_raw_mode()?;
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let _ = terminal::disable_raw_mode();
+        }
+    }
+    let _guard = Guard;
+    let mut line = String::new();
+    loop {
+        if let Event::Key(ev) = event::read()? {
+            if ev.kind == KeyEventKind::Release {
+                continue;
+            }
+            match ev.code {
+                KeyCode::Enter => break,
+                KeyCode::Esc => {
+                    line.clear();
+                    break;
+                }
+                KeyCode::Backspace => {
+                    line.pop();
+                }
+                KeyCode::Char('c') if ev.modifiers.contains(KeyModifiers::CONTROL) => {
+                    return Err(io::Error::new(io::ErrorKind::Interrupted, "interrupted"));
+                }
+                KeyCode::Char('u') if ev.modifiers.contains(KeyModifiers::CONTROL) => {
+                    line.clear();
+                }
+                KeyCode::Char('d') if ev.modifiers.contains(KeyModifiers::CONTROL) => break,
+                KeyCode::Char(c)
+                    if !ev.modifiers.contains(KeyModifiers::CONTROL) && !c.is_control() =>
+                {
+                    line.push(c);
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(line)
 }
 
 /// Open $EDITOR on a temp file; restore TUI after.
 pub fn edit_temp(body: &str) -> Result<String, String> {
-    #[cfg(unix)]
     tui_suspend();
-    let path = std::env::temp_dir().join(format!("goblin-draft-{}.txt", std::process::id()));
-    std::fs::write(&path, body).map_err(|e| e.to_string())?;
-    let editor = std::env::var("EDITOR").unwrap_or_else(|_| {
-        if cfg!(windows) {
-            "notepad".into()
-        } else {
-            "nano".into()
+    let result = (|| {
+        let path = std::env::temp_dir().join(format!("goblin-draft-{}.txt", std::process::id()));
+        std::fs::write(&path, body).map_err(|e| e.to_string())?;
+        let editor = std::env::var("EDITOR").unwrap_or_else(|_| {
+            if cfg!(windows) {
+                "notepad".into()
+            } else {
+                "nano".into()
+            }
+        });
+        let status = std::process::Command::new(&editor)
+            .arg(&path)
+            .status()
+            .map_err(|e| format!("{editor}: {e}"))?;
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = std::fs::remove_file(&path);
+        if !status.success() {
+            return Err(format!("{editor} exited {status}"));
         }
-    });
-    let status = std::process::Command::new(&editor)
-        .arg(&path)
-        .status()
-        .map_err(|e| format!("{editor}: {e}"))?;
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let _ = std::fs::remove_file(&path);
-    #[cfg(unix)]
+        Ok(text)
+    })();
     tui_resume();
-    if !status.success() {
-        return Err(format!("{editor} exited {status}"));
-    }
-    Ok(text)
+    result
 }
 
 #[cfg(test)]
@@ -856,5 +773,44 @@ mod tests {
         assert_eq!(decode_csi("B"), "down");
         assert_eq!(decode_csi("5~"), "pgup");
         assert_eq!(decode_csi("Z"), "shift-tab");
+    }
+
+    #[test]
+    fn crossterm_keys_match_house() {
+        let press = |code, mods| map_key_event(KeyEvent::new(code, mods));
+        assert_eq!(press(KeyCode::Enter, KeyModifiers::NONE), "enter");
+        assert_eq!(press(KeyCode::Esc, KeyModifiers::NONE), "esc");
+        assert_eq!(press(KeyCode::Backspace, KeyModifiers::NONE), "backspace");
+        assert_eq!(press(KeyCode::Tab, KeyModifiers::NONE), "tab");
+        assert_eq!(press(KeyCode::Tab, KeyModifiers::SHIFT), "shift-tab");
+        assert_eq!(press(KeyCode::BackTab, KeyModifiers::NONE), "shift-tab");
+        assert_eq!(press(KeyCode::Up, KeyModifiers::NONE), "up");
+        assert_eq!(press(KeyCode::Down, KeyModifiers::NONE), "down");
+        assert_eq!(press(KeyCode::Left, KeyModifiers::NONE), "left");
+        assert_eq!(press(KeyCode::Right, KeyModifiers::NONE), "right");
+        assert_eq!(press(KeyCode::PageUp, KeyModifiers::NONE), "pgup");
+        assert_eq!(press(KeyCode::PageDown, KeyModifiers::NONE), "pgdn");
+        assert_eq!(press(KeyCode::Home, KeyModifiers::NONE), "home");
+        assert_eq!(press(KeyCode::End, KeyModifiers::NONE), "end");
+        assert_eq!(press(KeyCode::Delete, KeyModifiers::NONE), "delete");
+        assert_eq!(press(KeyCode::Char('c'), KeyModifiers::CONTROL), "ctrl-c");
+        assert_eq!(press(KeyCode::Char('s'), KeyModifiers::CONTROL), "ctrl-s");
+        assert_eq!(press(KeyCode::Char('u'), KeyModifiers::CONTROL), "ctrl-u");
+        assert_eq!(press(KeyCode::Char('a'), KeyModifiers::CONTROL), "ctrl-a");
+        assert_eq!(press(KeyCode::Char('e'), KeyModifiers::CONTROL), "ctrl-e");
+        assert_eq!(press(KeyCode::Char('r'), KeyModifiers::CONTROL), "ctrl-r");
+        assert_eq!(press(KeyCode::Char('w'), KeyModifiers::CONTROL), "ctrl-w");
+        assert_eq!(press(KeyCode::Char('p'), KeyModifiers::CONTROL), "ctrl-p");
+        assert_eq!(press(KeyCode::Char('l'), KeyModifiers::CONTROL), "ctrl-l");
+        assert_eq!(press(KeyCode::Char('d'), KeyModifiers::CONTROL), "ctrl-d");
+        assert_eq!(press(KeyCode::Char(' '), KeyModifiers::NONE), "space");
+        assert_eq!(press(KeyCode::Char('q'), KeyModifiers::NONE), "q");
+        assert_eq!(press(KeyCode::Char('A'), KeyModifiers::SHIFT), "A");
+        let release = KeyEvent::new_with_kind(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
+        assert_eq!(map_key_event(release), "");
     }
 }
