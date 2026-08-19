@@ -26,11 +26,6 @@ impl Error {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn hint(self) -> Option<String> {
-        self.hint_line().map(str::to_string)
-    }
-
     pub fn say(msg: impl Into<String>, next: impl Into<String>) -> Self {
         Error::Hint {
             msg: msg.into(),

@@ -3,7 +3,7 @@
 #![cfg_attr(not(unix), allow(dead_code))]
 
 use crate::cli::{
-    self, load_accounts_file, load_default_account, load_named_account, open_path, remove_account,
+    load_accounts_file, load_default_account, load_named_account, open_path, remove_account,
     replace_account, save_account,
 };
 use crate::compose;
@@ -102,14 +102,14 @@ pub fn run() -> Result<u8, Error> {
     #[cfg(unix)]
     {
         if !std::io::stdout().is_terminal() {
-            return cli::dispatch(crate::Cmd::Peek {
+            return crate::cli::dispatch(crate::Cmd::Peek {
                 box_name: "unread".into(),
                 plain: false,
             });
         }
         art::set_force_unicode(true);
         let Some(fd) = art::tui_open_tty() else {
-            return cli::dispatch(crate::Cmd::Peek {
+            return crate::cli::dispatch(crate::Cmd::Peek {
                 box_name: "unread".into(),
                 plain: false,
             });
@@ -1529,8 +1529,6 @@ fn render_horde_banish(tw: usize, name: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    #[test]
     #[test]
     fn split_from_reads_display_and_email() {
         let (n, e) = split_from("Ada Lovelace <ada@x>");

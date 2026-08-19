@@ -394,12 +394,10 @@ fn cmd_sync(
         }
     }
     write_state(result.written)?;
-    if result.written > 0 && !no_notify {
-        if !notify::play() {
-            eprintln!(
-                "(new mail! goblin wants to squeak — drop a sound at ~/.config/goblin/notify.mp3)"
-            );
-        }
+    if result.written > 0 && !no_notify && !notify::play() {
+        eprintln!(
+            "(new mail! goblin wants to squeak — drop a sound at ~/.config/goblin/notify.mp3)"
+        );
     }
     Ok(0)
 }
@@ -575,11 +573,11 @@ fn cmd_move(dest: &str, files: Vec<String>, all: bool, local_only: bool) -> Resu
             if !m.uid.is_empty() {
                 server_msg = match dest {
                     MailBox::Read => {
-                        imap::mark_seen(&acc, password, &m.uid)?;
+                        imap::mark_seen(acc, password, &m.uid)?;
                         format!("uid {} marked Seen on server", m.uid)
                     }
                     MailBox::Trash => {
-                        let folder = imap::trash(&acc, password, &m.uid)?;
+                        let folder = imap::trash(acc, password, &m.uid)?;
                         format!("uid {} moved to {folder}", m.uid)
                     }
                     MailBox::Unread => unreachable!(),

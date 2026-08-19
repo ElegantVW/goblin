@@ -1,6 +1,5 @@
 //! House chrome — port of faeos `fae_termart` box / tui_* (no Python at runtime).
 
-use std::io::Write;
 use std::sync::Mutex;
 
 #[cfg(unix)]
@@ -108,16 +107,14 @@ pub fn strip_ansi(s: &str) -> String {
     let mut out = String::new();
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '\u{1b}' {
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                for n in chars.by_ref() {
-                    if n.is_ascii_alphabetic() || n == 'm' || n == 'K' {
-                        break;
-                    }
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for n in chars.by_ref() {
+                if n.is_ascii_alphabetic() || n == 'm' || n == 'K' {
+                    break;
                 }
-                continue;
             }
+            continue;
         }
         out.push(c);
     }
@@ -773,11 +770,6 @@ pub fn edit_temp(body: &str) -> Result<String, String> {
         return Err(format!("{editor} exited {status}"));
     }
     Ok(text)
-}
-
-#[allow(dead_code)]
-fn _flush(w: &mut impl Write) {
-    let _ = w.flush();
 }
 
 #[cfg(test)]
