@@ -23,7 +23,7 @@ use std::process::ExitCode;
 #[derive(Parser, Debug)]
 #[command(
     name = "goblin",
-    about = "goblin — mail client. owns its accounts. no aerc.",
+    about = "goblin — steals letters into his nest. ask him.",
     disable_help_subcommand = true
 )]
 pub struct Args {
@@ -33,19 +33,21 @@ pub struct Args {
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
-    /// Add or show the default account
-    Account {
+    /// Who we are (add / show / use a nest)
+    #[command(name = "nest", alias = "account")]
+    Nest {
         #[command(subcommand)]
         action: AccountCmd,
     },
-    /// One-shot: copy host/user from aerc (never writes the password to JSON)
+    /// One-shot leftover: copy host/user from aerc
+    #[command(hide = true)]
     ImportAerc {
-        /// Path to aerc accounts.conf (default: ~/.config/aerc/accounts.conf)
         #[arg(long)]
         file: Option<PathBuf>,
     },
-    /// Fetch mail into the local unread box
-    Sync {
+    /// Steal new letters from the sky
+    #[command(name = "steal", alias = "sync", alias = "fetch")]
+    Steal {
         #[arg(long)]
         quiet: bool,
         #[arg(long)]
@@ -61,29 +63,50 @@ pub enum Cmd {
         #[arg(long)]
         account: Option<String>,
     },
-    /// IMAP IDLE watcher — instant new-mail push
-    Idle,
-    /// List a box
-    List {
+    /// Watch the sky for new letters
+    #[command(name = "watch", alias = "idle")]
+    Watch,
+    /// Peek at a pile
+    #[command(name = "peek", alias = "list")]
+    Peek {
         #[arg(default_value = "unread")]
         box_name: String,
         #[arg(long)]
         plain: bool,
     },
-    /// Print one mail file
-    Show {
+    /// Read one letter
+    #[command(name = "read", alias = "show")]
+    Read {
         file: String,
         #[arg(long)]
         plain: bool,
     },
-    /// Compact unread digest (Pixie)
-    Bundle {
+    /// Unread pile for Pixie
+    #[command(name = "pile", alias = "bundle")]
+    Pile {
         #[arg(long, default_value_t = 280)]
         snippet: usize,
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
-    /// Move local files and update IMAP
+    /// Mark letters read
+    Keep {
+        files: Vec<String>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        local_only: bool,
+    },
+    /// Bin letters
+    Trash {
+        files: Vec<String>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        local_only: bool,
+    },
+    /// Old form: move read|trash
+    #[command(hide = true)]
     Move {
         dest: String,
         files: Vec<String>,
@@ -92,7 +115,7 @@ pub enum Cmd {
         #[arg(long)]
         local_only: bool,
     },
-    /// Send a message
+    /// Send a letter
     Send {
         #[arg(long)]
         to: String,
@@ -103,19 +126,22 @@ pub enum Cmd {
         #[arg(long)]
         body_file: Option<PathBuf>,
     },
-    /// Play or install the notify sound
-    Sound {
+    /// The goblin voice
+    #[command(name = "squeak", alias = "sound")]
+    Squeak {
         #[arg(long)]
         set: Option<PathBuf>,
     },
-    /// Search from/subject/body across unread, read, and trash
-    Search {
+    /// Hunt through the nest
+    #[command(name = "hunt", alias = "search")]
+    Hunt {
         query: Vec<String>,
         #[arg(long)]
         plain: bool,
     },
-    /// List, save, or open attachments on a local message
-    Attach {
+    /// Parcels on a letter
+    #[command(name = "parcel", alias = "attach")]
+    Parcel {
         #[command(subcommand)]
         action: AttachCmd,
     },
@@ -155,6 +181,9 @@ fn main() -> ExitCode {
         Ok(c) => c,
         Err(e) => {
             eprintln!("goblin: {e}");
+            if let Some(n) = e.hint_line() {
+                eprintln!("  next:  {n}");
+            }
             return ExitCode::from(1);
         }
     };
@@ -178,20 +207,35 @@ mod tests {
         let mut cmd = Args::command();
         let help = cmd.render_long_help().to_string();
         for needle in [
-            "account",
-            "import-aerc",
-            "sync",
-            "idle",
-            "list",
-            "show",
-            "bundle",
-            "move",
-            "send",
-            "sound",
-            "search",
-            "attach",
+            "steal", "watch", "peek", "read", "pile", "keep", "trash", "send", "squeak",
+            "hunt", "parcel", "nest",
         ] {
             assert!(help.contains(needle), "missing {needle} in:\n{help}");
+        }
+        for old in ["sync", "list", "idle", "bundle", "account"] {
+            assert!(
+                !help.lines().any(|l| l.trim().starts_with(old)),
+                "old name {old} should be a hidden alias, not a primary:\n{help}"
+            );
+        }
+    }
+
+    #[test]
+    fn old_names_still_parse() {
+        use clap::Parser;
+        for argv in [
+            vec!["goblin", "sync", "--quiet"],
+            vec!["goblin", "list", "unread", "--plain"],
+            vec!["goblin", "show", "1"],
+            vec!["goblin", "bundle"],
+            vec!["goblin", "idle"],
+            vec!["goblin", "search", "hi"],
+            vec!["goblin", "account", "show"],
+            vec!["goblin", "sound"],
+            vec!["goblin", "attach", "list", "1"],
+            vec!["goblin", "move", "trash", "1"],
+        ] {
+            Args::try_parse_from(&argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
         }
     }
 }

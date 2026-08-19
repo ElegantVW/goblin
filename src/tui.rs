@@ -48,14 +48,14 @@ struct App {
 
 pub fn run() -> Result<u8, Error> {
     if !std::io::stdout().is_terminal() {
-        return cli::dispatch(crate::Cmd::List {
+        return cli::dispatch(crate::Cmd::Peek {
             box_name: "unread".into(),
             plain: false,
         });
     }
     std::env::set_var("PIXIE_UNICODE", "1");
     let Some(fd) = art::tui_open_tty() else {
-        return cli::dispatch(crate::Cmd::List {
+        return cli::dispatch(crate::Cmd::Peek {
             box_name: "unread".into(),
             plain: false,
         });

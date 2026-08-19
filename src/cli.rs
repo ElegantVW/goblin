@@ -13,13 +13,13 @@ use std::path::{Path, PathBuf};
 
 pub fn dispatch(cmd: Cmd) -> Result<u8, Error> {
     match cmd {
-        Cmd::Account { action } => match action {
+        Cmd::Nest { action } => match action {
             AccountCmd::Add { preset } => cmd_account_add(preset.as_deref()),
             AccountCmd::Show => cmd_account_show(),
             AccountCmd::Use { name } => cmd_account_use(&name),
         },
         Cmd::ImportAerc { file } => cmd_import_aerc(file),
-        Cmd::Sync {
+        Cmd::Steal {
             quiet,
             no_notify,
             all,
@@ -28,10 +28,20 @@ pub fn dispatch(cmd: Cmd) -> Result<u8, Error> {
             limit,
             account,
         } => cmd_sync(quiet, no_notify, all, force, folder, limit, account),
-        Cmd::Idle => cmd_idle(),
-        Cmd::List { box_name, plain } => cmd_list(&box_name, plain),
-        Cmd::Show { file, plain } => cmd_show(&file, plain),
-        Cmd::Bundle { snippet, limit } => cmd_bundle(snippet, limit),
+        Cmd::Watch => cmd_idle(),
+        Cmd::Peek { box_name, plain } => cmd_list(&box_name, plain),
+        Cmd::Read { file, plain } => cmd_show(&file, plain),
+        Cmd::Pile { snippet, limit } => cmd_bundle(snippet, limit),
+        Cmd::Keep {
+            files,
+            all,
+            local_only,
+        } => cmd_move("read", files, all, local_only),
+        Cmd::Trash {
+            files,
+            all,
+            local_only,
+        } => cmd_move("trash", files, all, local_only),
         Cmd::Move {
             dest,
             files,
@@ -44,19 +54,16 @@ pub fn dispatch(cmd: Cmd) -> Result<u8, Error> {
             cc,
             body_file,
         } => cmd_send(&to, &subject, cc.as_deref(), body_file.as_deref()),
-        Cmd::Sound { set } => notify::cmd_sound(set.as_deref()),
-        Cmd::Search { query, plain } => cmd_search(&query.join(" "), plain),
-        Cmd::Attach { action } => cmd_attach(action),
+        Cmd::Squeak { set } => notify::cmd_sound(set.as_deref()),
+        Cmd::Hunt { query, plain } => cmd_search(&query.join(" "), plain),
+        Cmd::Parcel { action } => cmd_attach(action),
     }
 }
 
 pub fn load_accounts_file() -> Result<config::AccountFile, Error> {
     let path = paths::accounts_file();
     if !path.exists() {
-        return Err(Error::Usage(format!(
-            "no accounts at {} — run: goblin account add",
-            path.display()
-        )));
+        return Err(Error::say("no nest yet", "goblin nest add"));
     }
     config::load_accounts(&path)
 }
@@ -86,20 +93,13 @@ pub fn store() -> Store {
 fn cmd_account_show() -> Result<u8, Error> {
     let path = paths::accounts_file();
     if !path.exists() {
-        return Err(Error::Usage(format!(
-            "no accounts at {} — run: goblin account add",
-            path.display()
-        )));
+        return Err(Error::say("no nest yet", "goblin nest add"));
     }
     let file = config::load_accounts(&path)?;
     for acc in &file.accounts {
         let mark = if acc.name == file.default { "*" } else { " " };
-        println!(
-            "{mark} {:<12}  {}  imap {}@{}:{}",
-            acc.name, acc.from, acc.imap.user, acc.imap.host, acc.imap.port
-        );
+        println!("{mark} {:<12}  {}", acc.name, acc.from);
     }
-    println!("file    {}", path.display());
     Ok(0)
 }
 
@@ -114,62 +114,85 @@ fn cmd_account_use(name: &str) -> Result<u8, Error> {
 
 fn cmd_account_add(preset: Option<&str>) -> Result<u8, Error> {
     if !stdin_is_tty() {
-        return Err(Error::Usage("account add needs a tty".into()));
+        return Err(Error::say(
+            "nest add needs a real terminal",
+            "run: goblin nest add",
+        ));
     }
     let preset = match preset {
-        None => None,
-        Some("purelymail") => Some("purelymail"),
-        Some(other) => {
-            return Err(Error::Usage(format!(
-                "unknown preset {other:?} (try purelymail)"
-            )));
-        }
+        Some(id) => Some(id.to_string()),
+        None => Some(pick_nest()?),
     };
+    let preset = preset.filter(|s| s != "other");
 
-    let name = prompt("account name", Some("work"))?;
-    let from = prompt("from (Name <email>)", None)?;
-    let user = prompt("username / email", extract_addr(&from).as_deref())?;
+    let name = prompt("nest name", Some("work"))?;
+    let from = prompt("your name and email (Ada <ada@example.com>)", None)?;
+    let user = prompt("email address", extract_addr(&from).as_deref())?;
 
-    let (imap, smtp_ep) = if preset == Some("purelymail") {
-        let p = config::purelymail_preset(&name, &from, &user);
-        (p.imap, p.smtp)
+    let acc = if let Some(id) = preset.as_deref() {
+        config::apply_preset(id, &name, &from, &user)?
     } else {
-        let imap_host = prompt("imap host", None)?;
-        let imap_port = prompt("imap port", Some("993"))?
+        let imap_host = prompt("incoming sky (host)", None)?;
+        let imap_port = prompt("incoming port", Some("993"))?
             .parse::<u16>()
-            .map_err(|_| Error::Usage("bad imap port".into()))?;
-        let smtp_host = prompt("smtp host", None)?;
-        let smtp_port = prompt("smtp port", Some("465"))?
+            .map_err(|_| Error::say("bad incoming port", "use 993"))?;
+        let smtp_host = prompt("outgoing sky (host)", None)?;
+        let smtp_port = prompt("outgoing port", Some("465"))?
             .parse::<u16>()
-            .map_err(|_| Error::Usage("bad smtp port".into()))?;
-        (
-            Endpoint {
+            .map_err(|_| Error::say("bad outgoing port", "use 465 or 587"))?;
+        Account {
+            name: name.clone(),
+            from,
+            imap: Endpoint {
                 host: imap_host,
                 port: imap_port,
                 user: user.clone(),
             },
-            Endpoint {
+            smtp: Endpoint {
                 host: smtp_host,
                 port: smtp_port,
                 user: user.clone(),
             },
-        )
+        }
     };
-    crate::tls::imap_mode(imap.port)?;
-    crate::tls::smtp_mode(smtp_ep.port)?;
+    crate::tls::imap_mode(acc.imap.port)?;
+    crate::tls::smtp_mode(acc.smtp.port)?;
 
-    let password = read_password("password: ")?;
+    let pw_hint = preset
+        .as_deref()
+        .and_then(config::find_preset)
+        .filter(|p| p.wants_app_password)
+        .map(|_| "password (app password if your mail house asks for one): ")
+        .unwrap_or("password: ");
+    let password = read_password(pw_hint)?;
     if password.is_empty() {
-        return Err(Error::Usage("empty password".into()));
+        return Err(Error::say("empty password", "try nest add again"));
     }
-
-    let acc = Account {
-        name: name.clone(),
-        from,
-        imap,
-        smtp: smtp_ep,
-    };
     save_account(acc, &password)
+}
+
+fn pick_nest() -> Result<String, Error> {
+    eprintln!("which nest?");
+    for (i, p) in config::NEST_PRESETS.iter().enumerate() {
+        eprintln!("  {}  {}", i + 1, p.id);
+    }
+    eprintln!("  {}  other", config::NEST_PRESETS.len() + 1);
+    let raw = prompt("pick", Some("1"))?;
+    if let Ok(n) = raw.parse::<usize>() {
+        if n >= 1 && n <= config::NEST_PRESETS.len() {
+            return Ok(config::NEST_PRESETS[n - 1].id.to_string());
+        }
+        if n == config::NEST_PRESETS.len() + 1 {
+            return Ok("other".into());
+        }
+    }
+    if raw == "other" || config::find_preset(&raw).is_some() {
+        return Ok(raw);
+    }
+    Err(Error::say(
+        "unknown nest",
+        "pick 1-5, or: purelymail, google, disroot, outlook, yahoo",
+    ))
 }
 
 fn save_account(acc: Account, password: &str) -> Result<u8, Error> {
@@ -245,10 +268,9 @@ fn cmd_sync(
     };
     if !quiet {
         eprintln!(
-            "syncing {} from {} @ {} …",
-            if all { "all recent" } else { "unread (UNSEEN)" },
-            acc.imap.user,
-            acc.imap.host
+            "stealing {} for {} …",
+            if all { "recent letters" } else { "new letters" },
+            acc.imap.user
         );
     }
     let store = store();
@@ -265,7 +287,7 @@ fn cmd_sync(
     )?;
     if !quiet {
         println!(
-            "synced {} message(s) → {}",
+            "stole {} letter(s) → {}",
             result.written,
             store.box_dir(MailBox::Unread).display()
         );

@@ -1,6 +1,6 @@
 # Goblin
 
-Mail client. Owns its accounts. Speaks IMAP and SMTP. **No aerc.**
+Mail spirit. Ask him. **No aerc.**
 
 Rust engine for [faeOS](https://github.com/ElegantVW/faeOS) and for company use. One binary: CLI + TUI.
 
@@ -22,34 +22,31 @@ cd ~/goblin && ./build.sh install
 ## First run
 
 ```bash
-goblin account add --preset purelymail
-# or
-goblin import-aerc
-goblin sync
+goblin nest add          # pick purelymail / google / disroot / outlook / yahoo
+goblin steal
 goblin
 ```
 
 ## Commands
 
 ```
-goblin
-goblin account add|show
-goblin account add --preset purelymail
-goblin import-aerc
-goblin sync [--quiet] [--no-notify] [--all] [--force]
-goblin idle
-goblin list [unread|read|trash] [--plain]
-goblin show <file|#> [--plain]
-goblin bundle [--snippet N] [--limit N]
-goblin move read|trash <files…> [--all] [--local-only]
-goblin send --to ADDR --subject STR [--cc ADDR] [--body-file PATH|-]
-goblin search QUERY
-goblin attach list|save|open …
-goblin account use NAME
-goblin sound [--set FILE]
+goblin                         open the nest
+goblin nest add|show|use
+goblin nest add --preset google
+goblin steal                   new letters
+goblin peek [unread|read|trash]
+goblin read 1
+goblin send --to ADDR --subject STR
+goblin hunt invoice
+goblin watch
+goblin keep | trash
+goblin parcel list|save|open
+goblin squeak [--set FILE]
 ```
 
-TUI: `/` search · `[]` account · `a` open attachment · `n` next attachment.
+Old names (`sync`, `list`, `show`, `search`, `account`…) still work as aliases.
+
+TUI: `/` hunt · `[]` nest · `a` open parcel · `n` next parcel.
 
 Linux paths: `~/.config/goblin/`, `~/.cache/goblin/mail/{unread,read,trash}/`.
 

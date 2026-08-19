@@ -29,29 +29,96 @@ pub struct Endpoint {
 
 impl Endpoint {
     pub fn purelymail_imap(user: &str) -> Self {
-        Self {
-            host: "imap.purelymail.com".into(),
-            port: 993,
-            user: user.into(),
-        }
+        apply_preset("purelymail", "x", "x", user).unwrap().imap
     }
 
     pub fn purelymail_smtp(user: &str) -> Self {
-        Self {
-            host: "smtp.purelymail.com".into(),
-            port: 465,
-            user: user.into(),
-        }
+        apply_preset("purelymail", "x", "x", user).unwrap().smtp
     }
 }
 
-pub fn purelymail_preset(name: &str, from: &str, user: &str) -> Account {
-    Account {
+#[derive(Debug, Clone, Copy)]
+pub struct NestPreset {
+    pub id: &'static str,
+    pub imap_host: &'static str,
+    pub imap_port: u16,
+    pub smtp_host: &'static str,
+    pub smtp_port: u16,
+    pub wants_app_password: bool,
+}
+
+pub const NEST_PRESETS: &[NestPreset] = &[
+    NestPreset {
+        id: "purelymail",
+        imap_host: "imap.purelymail.com",
+        imap_port: 993,
+        smtp_host: "smtp.purelymail.com",
+        smtp_port: 465,
+        wants_app_password: false,
+    },
+    NestPreset {
+        id: "google",
+        imap_host: "imap.gmail.com",
+        imap_port: 993,
+        smtp_host: "smtp.gmail.com",
+        smtp_port: 465,
+        wants_app_password: true,
+    },
+    NestPreset {
+        id: "disroot",
+        imap_host: "disroot.org",
+        imap_port: 993,
+        smtp_host: "disroot.org",
+        smtp_port: 587,
+        wants_app_password: false,
+    },
+    NestPreset {
+        id: "outlook",
+        imap_host: "outlook.office365.com",
+        imap_port: 993,
+        smtp_host: "smtp.office365.com",
+        smtp_port: 587,
+        wants_app_password: false,
+    },
+    NestPreset {
+        id: "yahoo",
+        imap_host: "imap.mail.yahoo.com",
+        imap_port: 993,
+        smtp_host: "smtp.mail.yahoo.com",
+        smtp_port: 465,
+        wants_app_password: true,
+    },
+];
+
+pub fn find_preset(id: &str) -> Option<&'static NestPreset> {
+    NEST_PRESETS.iter().find(|p| p.id == id)
+}
+
+pub fn apply_preset(id: &str, name: &str, from: &str, user: &str) -> Result<Account, Error> {
+    let p = find_preset(id).ok_or_else(|| {
+        Error::say(
+            format!("unknown nest {id:?}"),
+            "try: purelymail, google, disroot, outlook, yahoo",
+        )
+    })?;
+    Ok(Account {
         name: name.into(),
         from: from.into(),
-        imap: Endpoint::purelymail_imap(user),
-        smtp: Endpoint::purelymail_smtp(user),
-    }
+        imap: Endpoint {
+            host: p.imap_host.into(),
+            port: p.imap_port,
+            user: user.into(),
+        },
+        smtp: Endpoint {
+            host: p.smtp_host.into(),
+            port: p.smtp_port,
+            user: user.into(),
+        },
+    })
+}
+
+pub fn purelymail_preset(name: &str, from: &str, user: &str) -> Account {
+    apply_preset("purelymail", name, from, user).expect("purelymail preset")
 }
 
 /// Fail closed if group/other have any permission bits.
@@ -257,6 +324,23 @@ mod tests {
         ));
         assert_eq!(file.accounts.len(), 2);
         assert_eq!(file.account("work").unwrap().from, "Ada <ada@work>");
+    }
+
+    #[test]
+    fn every_preset_uses_tls_ports() {
+        for p in NEST_PRESETS {
+            crate::tls::imap_mode(p.imap_port).unwrap_or_else(|e| panic!("{} imap: {e}", p.id));
+            crate::tls::smtp_mode(p.smtp_port).unwrap_or_else(|e| panic!("{} smtp: {e}", p.id));
+        }
+        assert!(find_preset("nope").is_none());
+        assert!(apply_preset("nope", "a", "b", "c").is_err());
+        let a = apply_preset("google", "g", "Me <me@gmail.com>", "me@gmail.com").unwrap();
+        assert_eq!(a.imap.host, "imap.gmail.com");
+        assert_eq!(a.imap.port, 993);
+        assert_eq!(a.smtp.port, 465);
+        let d = apply_preset("disroot", "d", "x@disroot.org", "x@disroot.org").unwrap();
+        assert_eq!(d.imap.host, "disroot.org");
+        assert_eq!(d.smtp.port, 587);
     }
 
     #[test]
