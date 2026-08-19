@@ -8,7 +8,7 @@ use crate::paths;
 use crate::smtp;
 use crate::store::{MailBox, MailMeta, Store};
 use crate::{secrets, AccountCmd, AttachCmd, Cmd};
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub fn dispatch(cmd: Cmd) -> Result<u8, Error> {
@@ -152,8 +152,8 @@ fn cmd_account_use(name: &str) -> Result<u8, Error> {
 fn cmd_account_add(preset: Option<&str>) -> Result<u8, Error> {
     if !stdin_is_tty() {
         return Err(Error::say(
-            "nest add needs a real terminal",
-            "run: goblin nest add",
+            "summon needs a real terminal",
+            "run: goblin summon",
         ));
     }
     let preset = match preset {
@@ -162,7 +162,7 @@ fn cmd_account_add(preset: Option<&str>) -> Result<u8, Error> {
     };
     let preset = preset.filter(|s| s != "other");
 
-    let name = prompt("nest name", Some("work"))?;
+    let name = prompt("goblin name", Some("work"))?;
     let from = prompt("your name and email (Ada <ada@example.com>)", None)?;
     let user = prompt("email address", extract_addr(&from).as_deref())?;
 
@@ -203,7 +203,7 @@ fn cmd_account_add(preset: Option<&str>) -> Result<u8, Error> {
         .unwrap_or("password: ");
     let password = read_password(pw_hint)?;
     if password.is_empty() {
-        return Err(Error::say("empty password", "try nest add again"));
+        return Err(Error::say("empty password", "try goblin summon again"));
     }
     let n = acc.name.clone();
     save_account(acc, &password, file_is_empty())?;
@@ -220,7 +220,7 @@ fn file_is_empty() -> bool {
 }
 
 fn pick_nest() -> Result<String, Error> {
-    eprintln!("which nest?");
+    eprintln!("which sky?");
     for (i, p) in config::NEST_PRESETS.iter().enumerate() {
         eprintln!("  {}  {}", i + 1, p.id);
     }
@@ -238,7 +238,7 @@ fn pick_nest() -> Result<String, Error> {
         return Ok(raw);
     }
     Err(Error::say(
-        "unknown nest",
+        "unknown sky",
         "pick 1-5, or: purelymail, google, disroot, outlook, yahoo",
     ))
 }
@@ -328,7 +328,10 @@ fn cmd_import_aerc(file: Option<PathBuf>) -> Result<u8, Error> {
             .unwrap_or_else(|| PathBuf::from("/nonexistent"))
     });
     if !path.is_file() {
-        return Err(Error::Usage(format!("no aerc config at {}", path.display())));
+        return Err(Error::Usage(format!(
+            "no aerc config at {}",
+            path.display()
+        )));
     }
     let imported = import_aerc::import_aerc(&path)?;
     let acc = imported.account;
@@ -343,7 +346,7 @@ fn cmd_import_aerc(file: Option<PathBuf>) -> Result<u8, Error> {
         password = read_password("password: ")?;
     }
     save_account(acc, &password, file_is_empty())?;
-    println!("imported nest");
+    println!("imported goblin");
     eprintln!("note: password stored in the keyring/secrets file, not in accounts.json");
     Ok(0)
 }
@@ -391,10 +394,10 @@ fn cmd_sync(
         }
     }
     write_state(result.written)?;
-    if result.written > 0 && !no_notify {
-        if !notify::play() {
-            eprintln!("(new mail! goblin wants to squeak — drop a sound at ~/.config/goblin/notify.mp3)");
-        }
+    if result.written > 0 && !no_notify && !notify::play() {
+        eprintln!(
+            "(new mail! goblin wants to squeak — drop a sound at ~/.config/goblin/notify.mp3)"
+        );
     }
     Ok(0)
 }
@@ -570,11 +573,11 @@ fn cmd_move(dest: &str, files: Vec<String>, all: bool, local_only: bool) -> Resu
             if !m.uid.is_empty() {
                 server_msg = match dest {
                     MailBox::Read => {
-                        imap::mark_seen(&acc, password, &m.uid)?;
+                        imap::mark_seen(acc, password, &m.uid)?;
                         format!("uid {} marked Seen on server", m.uid)
                     }
                     MailBox::Trash => {
-                        let folder = imap::trash(&acc, password, &m.uid)?;
+                        let folder = imap::trash(acc, password, &m.uid)?;
                         format!("uid {} moved to {folder}", m.uid)
                     }
                     MailBox::Unread => unreachable!(),
@@ -582,17 +585,31 @@ fn cmd_move(dest: &str, files: Vec<String>, all: bool, local_only: bool) -> Resu
             }
         }
         store.move_mail(&path, dest)?;
-        println!("moved {} → {}/  ({server_msg})", path.file_name().unwrap().to_string_lossy(), dest.as_str());
+        println!(
+            "moved {} → {}/  ({server_msg})",
+            path.file_name().unwrap().to_string_lossy(),
+            dest.as_str()
+        );
     }
     Ok(0)
 }
 
-fn cmd_send(to: &str, subject: &str, cc: Option<&str>, body_file: Option<&Path>) -> Result<u8, Error> {
+fn cmd_send(
+    to: &str,
+    subject: &str,
+    cc: Option<&str>,
+    body_file: Option<&Path>,
+) -> Result<u8, Error> {
     let (acc, password) = load_default_account()?;
     crate::tls::smtp_mode(acc.smtp.port)?;
     let body = read_body(body_file)?;
     let ccs: Vec<String> = cc
-        .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .map(|s| {
+            s.split(',')
+                .map(|x| x.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
         .unwrap_or_default();
     let mut rcpts = vec![to.to_string()];
     rcpts.extend(ccs.iter().cloned());
@@ -686,7 +703,10 @@ fn cmd_attach(action: AttachCmd) -> Result<u8, Error> {
             }
             if files.is_empty() {
                 for (i, name) in m.attachments.iter().enumerate() {
-                    println!("[{:>2}] {name}  (not on disk — re-sync with --force)", i + 1);
+                    println!(
+                        "[{:>2}] {name}  (not on disk — re-sync with --force)",
+                        i + 1
+                    );
                 }
                 return Ok(0);
             }
@@ -832,7 +852,7 @@ fn prompt(label: &str, default: Option<&str>) -> Result<String, Error> {
 }
 
 fn stdin_is_tty() -> bool {
-    unsafe { libc::isatty(libc::STDIN_FILENO) == 1 }
+    std::io::stdin().is_terminal()
 }
 
 fn read_password(prompt: &str) -> Result<String, Error> {
@@ -841,22 +861,15 @@ fn read_password(prompt: &str) -> Result<String, Error> {
     if !stdin_is_tty() {
         return Err(Error::Usage("password prompt needs a tty".into()));
     }
-    unsafe {
-        let fd = libc::STDIN_FILENO;
-        let mut old: libc::termios = std::mem::zeroed();
-        if libc::tcgetattr(fd, &mut old) != 0 {
-            return Err(Error::Usage("password prompt needs a tty".into()));
+    let line = crate::termart::read_secret_line().map_err(|e| {
+        if e.kind() == io::ErrorKind::Unsupported {
+            Error::Usage("password prompt needs a tty".into())
+        } else {
+            e.into()
         }
-        let mut new = old;
-        new.c_lflag &= !libc::ECHO;
-        libc::tcsetattr(fd, libc::TCSANOW, &new);
-        let mut line = String::new();
-        let res = io::stdin().lock().read_line(&mut line);
-        libc::tcsetattr(fd, libc::TCSANOW, &old);
-        eprintln!();
-        res?;
-        Ok(line.trim_end_matches(['\n', '\r']).to_string())
-    }
+    })?;
+    eprintln!();
+    Ok(line)
 }
 
 #[cfg(test)]
@@ -865,35 +878,129 @@ mod tests {
     use crate::config::purelymail_preset;
 
     #[test]
+    fn replace_account_rename_keeps_secret_when_password_none() {
+        let root = tempfile::tempdir().unwrap();
+        crate::paths::with_goblin_home(Some(root.path()), || {
+            let acc = purelymail_preset("work", "Ada <ada@x>", "ada@x");
+            save_account(acc.clone(), "hunter2", true).unwrap();
+            let renamed = purelymail_preset("home", "Ada <ada@x>", "ada@x");
+            replace_account("work", renamed.clone(), None).unwrap();
+            let file = config::load_accounts(&paths::accounts_file()).unwrap();
+            assert_eq!(file.default, "home");
+            assert!(file.account("work").is_err());
+            assert_eq!(
+                secrets::load_password(&secret_id(&renamed)).unwrap(),
+                "hunter2"
+            );
+        });
+    }
+
+    #[test]
+    fn replace_account_email_change_moves_secret() {
+        let root = tempfile::tempdir().unwrap();
+        crate::paths::with_goblin_home(Some(root.path()), || {
+            let acc = purelymail_preset("work", "Ada <ada@x>", "ada@x");
+            save_account(acc.clone(), "hunter2", true).unwrap();
+            let updated = purelymail_preset("work", "Ada <ada@y>", "ada@y");
+            replace_account("work", updated.clone(), None).unwrap();
+            assert!(secrets::load_password(&secret_id(&acc)).is_err());
+            assert_eq!(
+                secrets::load_password(&secret_id(&updated)).unwrap(),
+                "hunter2"
+            );
+        });
+    }
+
+    #[test]
+    fn replace_account_name_collision_errors() {
+        let root = tempfile::tempdir().unwrap();
+        crate::paths::with_goblin_home(Some(root.path()), || {
+            let work = purelymail_preset("work", "Ada <ada@x>", "ada@x");
+            let home = purelymail_preset("home", "Ada <ada@y>", "ada@y");
+            save_account(work, "hunter2", true).unwrap();
+            save_account(home, "hunter3", false).unwrap();
+            let collide = purelymail_preset("home", "Ada <ada@x>", "ada@x");
+            match replace_account("work", collide, None) {
+                Err(Error::Hint { msg, .. }) => {
+                    assert!(msg.contains("already watches"), "{msg}");
+                }
+                other => panic!("{other:?}"),
+            }
+            let file = config::load_accounts(&paths::accounts_file()).unwrap();
+            assert!(file.account("work").is_ok());
+            assert!(file.account("home").is_ok());
+        });
+    }
+
+    #[test]
+    fn replace_account_missing_goblin_errors() {
+        let root = tempfile::tempdir().unwrap();
+        crate::paths::with_goblin_home(Some(root.path()), || {
+            let acc = purelymail_preset("work", "Ada <ada@x>", "ada@x");
+            match replace_account("work", acc.clone(), None) {
+                Err(Error::Hint { msg, .. }) => assert!(msg.contains("no goblins yet"), "{msg}"),
+                other => panic!("{other:?}"),
+            }
+            save_account(acc, "hunter2", true).unwrap();
+            let ghost = purelymail_preset("ghost", "Ada <ada@x>", "ada@x");
+            match replace_account("ghost", ghost, None) {
+                Err(Error::Hint { msg, .. }) => assert!(msg.contains("no goblin named"), "{msg}"),
+                other => panic!("{other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn replace_account_new_password_overwrites_secret() {
+        let root = tempfile::tempdir().unwrap();
+        crate::paths::with_goblin_home(Some(root.path()), || {
+            let acc = purelymail_preset("work", "Ada <ada@x>", "ada@x");
+            save_account(acc.clone(), "hunter2", true).unwrap();
+            replace_account("work", acc.clone(), Some("s3cret")).unwrap();
+            assert_eq!(secrets::load_password(&secret_id(&acc)).unwrap(), "s3cret");
+        });
+    }
+
+    #[test]
     fn bundle_and_plain_contain_no_password() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::new(dir.path().to_path_buf());
-        let acc = purelymail_preset("work", "Ada <ada@x>", "ada@x");
-        let meta = MailMeta {
-            uid: "1".into(),
-            account: acc.name.clone(),
-            from: "bob@x".into(),
-            subject: "hi".into(),
-            body: String::new(),
-            ..MailMeta::default()
-        };
-        store
-            .write_mail(MailBox::Unread, &meta, "secret body s3cret-not-a-password-field")
-            .unwrap();
-        let json = serde_json::to_string(&acc).unwrap();
-        assert!(!json.contains("password"));
-        let mails = store.load_mails(MailBox::Unread).unwrap();
-        let mut plain = String::new();
-        for m in &mails {
-            plain.push_str(&format!(
-                "{}\tuid={}\tfrom={}\tsubject={}\n",
-                m.name(),
-                m.uid,
-                m.from,
-                m.subject
-            ));
-        }
-        assert!(!plain.contains("password"));
-        assert!(!plain.contains(&secrets::load_password("ada@x").unwrap_or_default()) || secrets::load_password("ada@x").is_err());
+        let root = tempfile::tempdir().unwrap();
+        crate::paths::with_goblin_home(Some(root.path()), || {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::new(dir.path().to_path_buf());
+            let acc = purelymail_preset("work", "Ada <ada@x>", "ada@x");
+            save_account(acc.clone(), "hunter2-not-in-list", true).unwrap();
+            let meta = MailMeta {
+                uid: "1".into(),
+                account: acc.name.clone(),
+                from: "bob@x".into(),
+                subject: "hi".into(),
+                body: String::new(),
+                ..MailMeta::default()
+            };
+            store
+                .write_mail(
+                    MailBox::Unread,
+                    &meta,
+                    "secret body s3cret-not-a-password-field",
+                )
+                .unwrap();
+            let json = serde_json::to_string(&acc).unwrap();
+            assert!(!json.contains("password"));
+            let mails = store.load_mails(MailBox::Unread).unwrap();
+            let mut plain = String::new();
+            for m in &mails {
+                plain.push_str(&format!(
+                    "{}\tuid={}\tfrom={}\tsubject={}\n",
+                    m.name(),
+                    m.uid,
+                    m.from,
+                    m.subject
+                ));
+            }
+            assert!(!plain.contains("password"));
+            let pw = secrets::load_password(&secret_id(&acc)).unwrap();
+            assert_eq!(pw, "hunter2-not-in-list");
+            assert!(!plain.contains(&pw), "{plain}");
+        });
     }
 }

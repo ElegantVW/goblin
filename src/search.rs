@@ -15,7 +15,13 @@ pub fn matches(mail: &MailMeta, query: &str) -> bool {
 fn haystack(mail: &MailMeta) -> String {
     format!(
         "{} {} {} {} {} {} {}",
-        mail.from, mail.to, mail.subject, mail.body, mail.account, mail.uid, mail.name()
+        mail.from,
+        mail.to,
+        mail.subject,
+        mail.body,
+        mail.account,
+        mail.uid,
+        mail.name()
     )
     .to_ascii_lowercase()
 }

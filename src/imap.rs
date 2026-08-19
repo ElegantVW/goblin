@@ -31,7 +31,12 @@ pub fn validate(port: u16) -> Result<(), Error> {
     tls::imap_mode(port).map(|_| ())
 }
 
-pub fn sync(account: &Account, password: &str, store: &Store, opts: SyncOpts) -> Result<SyncResult, Error> {
+pub fn sync(
+    account: &Account,
+    password: &str,
+    store: &Store,
+    opts: SyncOpts,
+) -> Result<SyncResult, Error> {
     tls::install_crypto();
     validate(account.imap.port)?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| Error::Imap(e.to_string()))?;
@@ -93,10 +98,7 @@ async fn sync_async(
     store: &Store,
     opts: SyncOpts,
 ) -> Result<SyncResult, Error> {
-    let folder = opts
-        .folder
-        .clone()
-        .unwrap_or_else(|| "INBOX".into());
+    let folder = opts.folder.clone().unwrap_or_else(|| "INBOX".into());
     let mut c = Client::connect(account, password).await?;
     c.select(&folder).await?;
     let spec = if opts.all { "ALL" } else { "UNSEEN" };
@@ -315,10 +317,7 @@ impl Client {
                         break;
                     }
                     if line.starts_with("A0000 NO") || line.starts_with("A0000 BAD") {
-                        return Err(Error::Imap(format!(
-                            "STARTTLS refused: {}",
-                            line.trim()
-                        )));
+                        return Err(Error::Imap(format!("STARTTLS refused: {}", line.trim())));
                     }
                 }
                 let tcp = plain.into_inner();
@@ -395,7 +394,7 @@ impl Client {
             .flush()
             .await
             .map_err(|e| Error::Imap(e.to_string()))?;
-        // wait for + 
+        // wait for +
         let _ = tokio::time::timeout(Duration::from_secs(30), self.read_line()).await;
         let _ = tokio::time::timeout(dur, self.read_line()).await;
         self.r
@@ -412,11 +411,11 @@ impl Client {
         let prefix = format!("{tag} ");
         loop {
             let line = self.read_line().await?;
-            if line.starts_with(&prefix) {
-                if line[prefix.len()..].starts_with("OK") || line[prefix.len()..].starts_with("NO") || line[prefix.len()..].starts_with("BAD") {
-                    if line[prefix.len()..].starts_with("OK") {
-                        return Ok(());
-                    }
+            if let Some(rest) = line.strip_prefix(&prefix) {
+                if rest.starts_with("OK") {
+                    return Ok(());
+                }
+                if rest.starts_with("NO") || rest.starts_with("BAD") {
                     return Err(Error::Imap(line));
                 }
             }

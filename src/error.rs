@@ -26,10 +26,6 @@ impl Error {
         }
     }
 
-    pub fn hint(self) -> Option<String> {
-        self.hint_line().map(str::to_string)
-    }
-
     pub fn say(msg: impl Into<String>, next: impl Into<String>) -> Self {
         Error::Hint {
             msg: msg.into(),
@@ -47,7 +43,11 @@ impl fmt::Display for Error {
                 path.display()
             ),
             Error::TlsPolicy(s) => write!(f, "{s}"),
-            Error::Config(s) | Error::Secret(s) | Error::Usage(s) | Error::Imap(s) | Error::Smtp(s) => {
+            Error::Config(s)
+            | Error::Secret(s)
+            | Error::Usage(s)
+            | Error::Imap(s)
+            | Error::Smtp(s) => {
                 write!(f, "{s}")
             }
             Error::Hint { msg, .. } => write!(f, "{msg}"),

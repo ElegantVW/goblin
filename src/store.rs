@@ -4,8 +4,6 @@ use crate::error::Error;
 use crate::paths;
 use std::collections::HashSet;
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,10 +79,7 @@ impl Store {
 
     pub fn ensure(&self) -> Result<(), Error> {
         for b in MailBox::all() {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(self.box_dir(b))?;
+            crate::fsutil::mkdir_private(&self.box_dir(b))?;
         }
         Ok(())
     }
@@ -100,12 +95,9 @@ impl Store {
 
     pub fn write_attachment(&self, uid: &str, name: &str, bytes: &[u8]) -> Result<PathBuf, Error> {
         let dir = self.attach_dir(uid);
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&dir)?;
+        crate::fsutil::mkdir_private(&dir)?;
         let path = dir.join(safe_attach_name(name));
-        atomic_write_bytes_0600(&path, bytes)?;
+        crate::fsutil::write_private(&path, bytes)?;
         Ok(path)
     }
 
@@ -130,7 +122,9 @@ impl Store {
         body: &str,
     ) -> Result<PathBuf, Error> {
         self.ensure()?;
-        let mut path = self.box_dir(box_name).join(safe_filename(&meta.uid, &meta.subject));
+        let mut path = self
+            .box_dir(box_name)
+            .join(safe_filename(&meta.uid, &meta.subject));
         if path.exists() {
             let existing = fs::read_to_string(&path).unwrap_or_default();
             if !existing.contains(&format!("uid: {}", meta.uid)) {
@@ -138,7 +132,7 @@ impl Store {
             }
         }
         let text = format_mail(meta, body);
-        atomic_write_0600(&path, &text)?;
+        crate::fsutil::write_private(&path, text.as_bytes())?;
         Ok(path)
     }
 
@@ -294,25 +288,6 @@ fn safe_filename(uid: &str, subject: &str) -> String {
     format!("uid{uid}_{sub}.txt")
 }
 
-fn atomic_write_0600(path: &Path, text: &str) -> Result<(), Error> {
-    atomic_write_bytes_0600(path, text.as_bytes())
-}
-
-fn atomic_write_bytes_0600(path: &Path, bytes: &[u8]) -> Result<(), Error> {
-    let tmp = path.with_extension("part");
-    {
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true).mode(0o600);
-        let mut f = opts.open(&tmp)?;
-        f.write_all(bytes)?;
-    }
-    fs::rename(&tmp, path)?;
-    let mut perms = fs::metadata(path)?.permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(path, perms)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,8 +319,10 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.starts_with("uid: 42\n"), "{text}");
         assert!(text.contains("\n---\n"), "{text}");
-        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        #[cfg(unix)]
+        {
+            assert_eq!(crate::fsutil::file_mode(&path).unwrap(), Some(0o600));
+        }
         let parsed = parse_mail_file(&path).unwrap();
         assert_eq!(parsed.uid, "42");
         assert_eq!(parsed.body, "hi there");
@@ -379,8 +356,10 @@ mod tests {
             .write_attachment(&m.uid, "doc.pdf", b"%PDF-1.4")
             .unwrap();
         assert!(saved.ends_with("doc.pdf"));
-        let mode = fs::metadata(&saved).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        #[cfg(unix)]
+        {
+            assert_eq!(crate::fsutil::file_mode(&saved).unwrap(), Some(0o600));
+        }
         m.attachments = vec!["doc.pdf".into()];
         let path = store.write_mail(MailBox::Unread, &m, "see file").unwrap();
         let text = fs::read_to_string(&path).unwrap();

@@ -64,7 +64,7 @@ fn build(
     if !cc.is_empty() {
         headers.push_str(&format!("Cc: {}\r\n", cc.join(", ")));
     }
-    headers.push_str(&format!("Subject: {subject}\r\n"));
+    headers.push_str(&format!("Subject: {}\r\n", encode_header_value(subject)));
     headers.push_str(&format!("Date: {date}\r\n"));
     headers.push_str(&format!("Message-ID: {mid}\r\n"));
     if let Some(irt) = in_reply_to {
@@ -84,6 +84,16 @@ fn build(
         out.extend_from_slice(b"\r\n");
     }
     out
+}
+
+/// RFC 2047 encoded-word when the value is not plain ASCII.
+fn encode_header_value(value: &str) -> String {
+    if value.is_ascii() && !value.chars().any(|c| c.is_control()) {
+        return value.to_string();
+    }
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(value.as_bytes());
+    format!("=?UTF-8?B?{b64}?=")
 }
 
 fn message_id() -> String {
@@ -123,6 +133,20 @@ mod tests {
         assert!(text.contains("Content-Type: text/plain; charset=utf-8\r\n"));
         assert!(!text.to_ascii_lowercase().contains("bcc:"));
         assert!(text.contains("\r\n\r\nbody line\r\n"));
+    }
+
+    #[test]
+    fn non_ascii_subject_is_rfc2047() {
+        let raw = compose(
+            "Ada <ada@example.com>",
+            "bob@example.com",
+            &[],
+            "Personal→Vanguarda",
+            "hi",
+        );
+        let text = String::from_utf8(raw).unwrap();
+        assert!(text.contains("Subject: =?UTF-8?B?"), "{text}");
+        assert!(!text.contains("Subject: Personal→"), "{text}");
     }
 
     #[test]

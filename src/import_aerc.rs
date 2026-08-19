@@ -22,9 +22,7 @@ pub fn import_aerc(path: &Path) -> Result<Imported, Error> {
         }
         if line.starts_with('[') && line.ends_with(']') {
             cur = Some(line[1..line.len() - 1].to_string());
-            sections
-                .entry(cur.clone().unwrap())
-                .or_default();
+            sections.entry(cur.clone().unwrap()).or_default();
             continue;
         }
         let Some(name) = &cur else { continue };
@@ -121,7 +119,8 @@ fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(v) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            if let Ok(v) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
             {
                 out.push(v);
                 i += 3;
