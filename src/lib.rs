@@ -12,6 +12,7 @@ pub mod notify;
 pub mod paths;
 pub mod search;
 pub mod secrets;
+pub mod server;
 pub mod smtp;
 pub mod store;
 pub mod termart;

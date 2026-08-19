@@ -10,6 +10,10 @@ publish = false
 name = "goblin"
 path = "src/main.rs"
 
+[[bin]]
+name = "goblind"
+path = "src/bin/goblind.rs"
+
 [features]
 default = []
 keyring = ["dep:keyring"]
@@ -30,6 +34,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 hostname = "0.4"
 crossterm = "0.28"
 base64 = "0.22"
+rustls-pemfile = "2"
+rcgen = "0.13"
 
 [dev-dependencies]
 tempfile = "3"
