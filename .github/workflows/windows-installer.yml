@@ -1,0 +1,67 @@
+name: windows-installer
+on:
+  push:
+    branches: [goblind, main, quality-gate]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "packaging/windows/**"
+      - ".github/workflows/windows-installer.yml"
+  workflow_dispatch:
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binaries
+        shell: pwsh
+        run: |
+          cargo build --release --bin goblin --bin goblin-gui
+          New-Item -ItemType Directory -Force -Path packaging/windows/staging | Out-Null
+          New-Item -ItemType Directory -Force -Path dist/windows | Out-Null
+          Copy-Item target/release/goblin.exe packaging/windows/staging/ -Force
+          Copy-Item target/release/goblin-gui.exe packaging/windows/staging/ -Force
+          @"
+          Goblin — mail client
+          ====================
+
+          Desktop shortcut opens Goblin GUI (goblin-gui.exe).
+
+          PowerShell / Windows Terminal (optional):
+            goblin.exe who
+            goblin.exe steal
+            goblin.exe
+
+          Docs: https://github.com/ElegantVW/goblin
+          "@ | Set-Content -Path packaging/windows/staging/README.txt -Encoding utf8
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC.exe not found after chocolatey install" }
+          & $iscc packaging\windows\goblin.iss
+          Get-ChildItem dist\windows
+
+      - name: Upload installer + bins
+        uses: actions/upload-artifact@v4
+        with:
+          name: goblin-windows
+          path: |
+            dist/windows/Goblin-Setup-*.exe
+            packaging/windows/staging/goblin.exe
+            packaging/windows/staging/goblin-gui.exe
+            packaging/windows/staging/README.txt
+          if-no-files-found: error
