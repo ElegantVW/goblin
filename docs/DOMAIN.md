@@ -59,11 +59,34 @@ Remove Purelymail MX/SPF/DKIM only after:
 
 Optional dual-MX during trial: keep Purelymail at a worse priority, or run a short parallel receive test before the flip.
 
-## What Goblin will add later
+## goblind (our server — in progress)
 
-- `goblind` — company IMAP/SMTP for `@vanguardaautomovel.com`
-- `goblin sky prepare DOMAIN` — print the Squarespace rows above
-- `goblin sky check DOMAIN` — verify live DNS matches the recipe (read-only)
-- Mailbox provisioning for shop users
+`goblind` is **our** Rust binary in this repo (not Postfix/Dovecot/Purelymail). Data default: `GOBLIND_HOME` or the platform local-data dir for `goblind`.
+
+```bash
+# DNS recipe for Squarespace (human paste — no API)
+goblind sky print-dns vanguardaautomovel.com
+
+# Mailbox (password never in accounts.json)
+export GOBLIND_HOME=/path/to/goblind-data   # optional isolation
+goblind user add design@vanguardaautomovel.com
+goblind user list
+
+# Run listeners (submission 465 or 587; IMAP 993 — goblin client TLS ports)
+goblind run --bind 0.0.0.0 --smtp-in 25 --smtp-sub 465 --imap 993
+```
+
+Lab CA is `$GOBLIND_HOME/tls/ca.pem`. Point the client at it so verification stays on (no insecure flag):
+
+```bash
+export GOBLIN_EXTRA_CA=$GOBLIND_HOME/tls/ca.pem
+# goblin nest: imap 127.0.0.1:993  smtp 127.0.0.1:465  (or localhost / mail.vanguardaautomovel.com)
+goblin steal
+goblin send --to design@vanguardaautomovel.com --subject "lab" --body-file msg.txt
+```
+
+Binding 25/465/993 needs root, `CAP_NET_BIND_SERVICE`, or a lowered `net.ipv4.ip_unprivileged_port_start`.
+
+Still coming: DKIM signing, systemd unit, MX cutover smoke.
 
 Registrar renewals, nameservers, and transfers stay in Squarespace. If you need API-driven DNS, move nameservers to Cloudflare (or similar) — that is optional and separate.

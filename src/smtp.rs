@@ -27,7 +27,14 @@ async fn send_async(
 ) -> Result<(), Error> {
     let mode = tls::smtp_mode(account.smtp.port)?;
     let host = account.smtp.host.clone();
-    let tls_params = TlsParameters::builder(host.clone())
+    let mut tls_builder = TlsParameters::builder(host.clone());
+    // Same lab CA as IMAP: GOBLIN_EXTRA_CA PEM is added to the root store (verification on).
+    if let Some(pem) = tls::extra_ca_pem()? {
+        let cert = lettre::transport::smtp::client::Certificate::from_pem(&pem)
+            .map_err(|e| Error::Smtp(format!("GOBLIN_EXTRA_CA: {e}")))?;
+        tls_builder = tls_builder.add_root_certificate(cert);
+    }
+    let tls_params = tls_builder
         .build_rustls()
         .map_err(|e| Error::Smtp(format!("tls params: {e}")))?;
     let creds = Credentials::new(account.smtp.user.clone(), password.to_string());

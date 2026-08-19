@@ -6,7 +6,10 @@ use crate::fsutil;
 use std::io::{BufRead, BufReader};
 
 pub fn store_password(address: &str, password: &str) -> Result<(), Error> {
-    if password.contains('\n') || password.contains('\t') || address.contains('\t') || address.contains('\n')
+    if password.contains('\n')
+        || password.contains('\t')
+        || address.contains('\t')
+        || address.contains('\n')
     {
         return Err(Error::Secret(
             "password/address must not contain tab or newline".into(),
@@ -53,6 +56,28 @@ pub fn verify(address: &str, password: &str) -> Result<bool, Error> {
         Ok(stored) => Ok(stored == password),
         Err(Error::Secret(_)) => Ok(false),
         Err(e) => Err(e),
+    }
+}
+
+/// Lowercase; if `user` has no `@`, append the configured domain.
+pub fn canonicalize(user: &str) -> String {
+    let a = user.trim().to_ascii_lowercase();
+    if a.contains('@') {
+        return a;
+    }
+    match super::config::load_or_empty() {
+        Ok(file) if !file.domain.is_empty() => format!("{a}@{}", file.domain),
+        _ => a,
+    }
+}
+
+/// Returns the stored address on success.
+pub fn verify_login(user: &str, password: &str) -> Result<Option<String>, Error> {
+    let addr = canonicalize(user);
+    if verify(&addr, password)? {
+        Ok(Some(addr))
+    } else {
+        Ok(None)
     }
 }
 

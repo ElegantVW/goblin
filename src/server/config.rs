@@ -54,10 +54,7 @@ pub fn load() -> Result<AccountFile, Error> {
     }
     if fsutil::is_world_readable(&path)? {
         let mode = fsutil::file_mode(&path)?.unwrap_or(0);
-        return Err(Error::Perms {
-            path,
-            mode,
-        });
+        return Err(Error::Perms { path, mode });
     }
     let text = std::fs::read_to_string(&path)?;
     let raw: serde_json::Value = serde_json::from_str(&text)?;

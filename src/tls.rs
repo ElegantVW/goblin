@@ -44,24 +44,87 @@ pub fn imap_mode(port: u16) -> Result<TlsMode, Error> {
     }
 }
 
-pub fn client_config() -> Arc<rustls::ClientConfig> {
+/// Build a verifying client config.
+///
+/// If `GOBLIN_EXTRA_CA` is set to a PEM path (lab: `$GOBLIND_HOME/tls/ca.pem`), those
+/// certificates are added to the root store *in addition to* webpki_roots. Verification
+/// stays on; this is not an insecure skip-verify flag.
+pub fn client_config() -> Result<Arc<rustls::ClientConfig>, Error> {
     install_crypto();
-    let roots = rustls::RootCertStore {
+    let mut roots = rustls::RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
     };
+    if let Some(pem) = extra_ca_pem()? {
+        add_extra_roots(&mut roots, &pem)?;
+    }
     let cfg = rustls::ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
-    Arc::new(cfg)
+    Ok(Arc::new(cfg))
+}
+
+/// Raw PEM bytes from `GOBLIN_EXTRA_CA`, if set.
+pub fn extra_ca_pem() -> Result<Option<Vec<u8>>, Error> {
+    let path = match std::env::var("GOBLIN_EXTRA_CA") {
+        Ok(p) if !p.trim().is_empty() => p,
+        _ => return Ok(None),
+    };
+    let bytes = std::fs::read(&path)
+        .map_err(|e| Error::TlsPolicy(format!("GOBLIN_EXTRA_CA {path}: {e}")))?;
+    Ok(Some(bytes))
+}
+
+fn add_extra_roots(roots: &mut rustls::RootCertStore, pem: &[u8]) -> Result<(), Error> {
+    let mut r = std::io::Cursor::new(pem);
+    let certs: Vec<rustls::pki_types::CertificateDer<'static>> = rustls_pemfile::certs(&mut r)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| Error::TlsPolicy(format!("GOBLIN_EXTRA_CA: {e}")))?;
+    if certs.is_empty() {
+        return Err(Error::TlsPolicy(
+            "GOBLIN_EXTRA_CA contains no certificates".into(),
+        ));
+    }
+    for c in certs {
+        roots
+            .add(c)
+            .map_err(|e| Error::TlsPolicy(format!("GOBLIN_EXTRA_CA: {e}")))?;
+    }
+    Ok(())
 }
 
 pub async fn wrap_tls(host: &str, stream: TcpStream) -> Result<TlsStream<TcpStream>, Error> {
     let name = ServerName::try_from(host.to_string())
         .map_err(|e| Error::TlsPolicy(format!("bad tls name {host}: {e}")))?;
-    TlsConnector::from(client_config())
+    TlsConnector::from(client_config()?)
         .connect(name, stream)
         .await
         .map_err(|e| Error::TlsPolicy(format!("tls handshake: {e}")))
+}
+
+#[cfg(test)]
+pub(crate) fn with_extra_ca_env<R>(path: Option<&std::path::Path>, f: impl FnOnce() -> R) -> R {
+    use std::sync::Mutex;
+    static LOCK: Mutex<()> = Mutex::new(());
+    let guard = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let prev = std::env::var_os("GOBLIN_EXTRA_CA");
+    unsafe {
+        match path {
+            Some(p) => std::env::set_var("GOBLIN_EXTRA_CA", p),
+            None => std::env::remove_var("GOBLIN_EXTRA_CA"),
+        }
+    }
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    unsafe {
+        match prev {
+            Some(v) => std::env::set_var("GOBLIN_EXTRA_CA", v),
+            None => std::env::remove_var("GOBLIN_EXTRA_CA"),
+        }
+    }
+    drop(guard);
+    match out {
+        Ok(v) => v,
+        Err(p) => std::panic::resume_unwind(p),
+    }
 }
 
 #[cfg(test)]
@@ -89,5 +152,20 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(imap_mode(993).unwrap(), TlsMode::Implicit);
+    }
+
+    #[test]
+    fn extra_ca_is_loaded_into_client_config() {
+        install_crypto();
+        let dir = tempfile::tempdir().unwrap();
+        crate::server::paths::with_goblind_home(Some(dir.path()), || {
+            crate::server::tlsutil::ensure_certs().unwrap();
+            let ca = crate::server::tlsutil::ca_file();
+            with_extra_ca_env(Some(&ca), || {
+                let pem = extra_ca_pem().unwrap().expect("pem");
+                assert!(pem.starts_with(b"-----BEGIN CERTIFICATE-----"));
+                client_config().unwrap();
+            });
+        });
     }
 }
