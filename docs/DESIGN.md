@@ -1,29 +1,43 @@
-# Goblin v1 design
+# Goblin design
 
-Rust mail **client**. Owns its accounts. Speaks IMAP + SMTP. No aerc at runtime.
+Rust mail **product**. One repo, three pillars. No aerc at runtime.
 
 ## Language
 
-Rust. Own repo, same install contract as Bulwark. Cross-OS. The same tree can grow an office `goblind` later; that is a different spec.
+Rust. Own repo (Bulwark-style install on faeOS). Cross-OS **client**. Server (`goblind`) is Linux-first.
+
+## Three pillars
+
+| Pillar | Binary / surface | Job |
+|--------|------------------|-----|
+| 1. Simple mail | `goblin` client | Personal + company daily mail (IMAP/SMTP). Horde CLI + TUI. |
+| 2. Private company mail | `goblind` | Company IMAP/SMTP for domains we own (e.g. `@vanguardaautomovel.com`). Replaces Purelymail. |
+| 3. Domain / sky ops | CLI (+ later TUI) | Mail DNS recipes + health checks; mailbox admin. Not the registrar. |
+
+See [DOMAIN.md](DOMAIN.md) for `vanguardaautomovel.com` + Squarespace.
 
 ## Rules
 
 - TLS required: IMAP 993 or 143+STARTTLS; SMTP 465 or 587+STARTTLS. Cert verification on. No insecure flag.
-- Secrets: OS keyring (`service=goblin`), then `0600` `secrets` file, optional `accounts.json.gpg`. Never in JSON, URLs, argv, logs, or Pixie output.
+- Secrets: default `0600` secrets file; optional `--features keyring` (OS keyring first). Optional `accounts.json.gpg`. Never in JSON, URLs, argv, logs, or Pixie output.
 - Unix: config dir `0700`, accounts and mail files `0600`. Fail closed if group/other-readable.
-- Linux paths stay `~/.config/goblin/` and `~/.cache/goblin/mail/{unread,read,trash}/`.
+- Linux paths stay `~/.config/goblin/` and `~/.cache/goblin/mail/{unread,read,trash}/` when `GOBLIN_HOME` unset. Windows uses the platform config/cache dirs from the `directories` crate.
 - No other mail programs. `goblin import-aerc` is a one-shot and never writes the password into JSON.
 
-## v1.1 (this phase)
+## Client status
 
-- Search across unread/read/trash (`goblin search`, TUI `/`).
-- Attachments extracted on sync to `~/.cache/goblin/attach/{uid}/`; `goblin attach list|save|open`; TUI `a` / `n`.
-- Multiple accounts: `account add` upserts; `account show` lists; `account use NAME`; TUI `[` `]`; `sync --account NAME`.
+Shipped: search, attachments, multi-account (summon/who/wake/mend/dismiss), Purelymail/google/disroot/outlook/yahoo presets, quality gate (portable crate, optional keyring, CI).
 
-## Still later
+In progress: **company client parity** — real Windows TUI (crossterm), password echo-off on Windows, DOMAIN/DESIGN docs, CI green on Windows.
 
-HTML compose, Bcc, drafts box, Sent IMAP APPEND, office mail server, replacing Purelymail, Windows/macOS service wrappers.
+## Purelymail retirement
 
-## Later
+Purelymail is the **current** public MX for Vanguarda. It will be **removed** once `goblind` answers MX for the domain (first on the build machine, then the office server). Until cutover, the client keeps using Purelymail hosts for the Vanguarda goblin.
 
-Office LAN engine in this repo. Purelymail stays the public MX/relay. Same client, new account pointing at the office host.
+## Later (not this phase)
+
+- `goblind` SMTP/IMAP + DKIM on this machine → office PC
+- Squarespace MX cutover (DOMAIN.md checklist)
+- HTML compose, Bcc, drafts, Sent IMAP APPEND
+- `sky prepare` / `sky check`
+- UID namespaces per folder/account (avoid cross-folder UID collisions in the local cache)

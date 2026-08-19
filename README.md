@@ -32,7 +32,11 @@ Override all paths (tests, portable USB, CI):
 export GOBLIN_HOME=/path/to/goblin-data
 ```
 
-Unset, Linux stays `~/.config/goblin` and `~/.cache/goblin`.
+Unset:
+
+- Linux: `~/.config/goblin` and `~/.cache/goblin`
+- Windows: `%APPDATA%\goblin` (config) and `%LOCALAPPDATA%\goblin` (cache) via the `directories` crate
+- macOS: `~/Library/Application Support/faeos.goblin` (and related cache)
 
 faeOS house install remains `./build.sh install` (writes `~/.local/lib/faeos/goblin` + `~/bin/goblin`).
 
@@ -41,6 +45,17 @@ faeOS house install remains `./build.sh install` (writes `~/.local/lib/faeos/gob
 ```bash
 goblin summon            # pick purelymail / google / disroot / outlook / yahoo
 goblin steal
+goblin
+```
+
+### Vanguarda Automovel (company goblin)
+
+Domain DNS stays on Squarespace; mail is still Purelymail until `goblind` cutover — see [docs/DOMAIN.md](docs/DOMAIN.md).
+
+```bash
+goblin wake Vanguarda    # design@vanguardaautomovel.com
+goblin steal
+goblin peek
 goblin
 ```
 
