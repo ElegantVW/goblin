@@ -22,8 +22,6 @@ tokio-rustls = "0.26"
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
 webpki-roots = "1"
 mail-parser = "0.9"
-ratatui = "0.29"
-crossterm = "0.28"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 hostname = "0.4"
 libc = "0.2"

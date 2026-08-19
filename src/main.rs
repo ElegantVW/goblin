@@ -11,6 +11,7 @@ mod paths;
 mod secrets;
 mod smtp;
 mod store;
+mod termart;
 mod tls;
 mod tui;
 
