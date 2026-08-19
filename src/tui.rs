@@ -94,10 +94,10 @@ struct App {
 pub fn run() -> Result<u8, Error> {
     #[cfg(not(unix))]
     {
-        return Err(Error::say(
+        Err(Error::say(
             "the horde TUI needs a unix tty for now",
             "goblin peek   or   goblin steal",
-        ));
+        ))
     }
     #[cfg(unix)]
     {
@@ -151,10 +151,10 @@ pub fn run_mend(name: Option<String>) -> Result<u8, Error> {
     #[cfg(not(unix))]
     {
         let _ = name;
-        return Err(Error::say(
+        Err(Error::say(
             "the horde TUI needs a unix tty for now",
             "goblin peek   or   goblin steal",
-        ));
+        ))
     }
     #[cfg(unix)]
     {
