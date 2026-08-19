@@ -34,10 +34,13 @@ In progress: **company client parity** — real Windows TUI (crossterm), passwor
 
 Purelymail is the **current** public MX for Vanguarda. It will be **removed** once `goblind` answers MX for the domain (first on the build machine, then the office server). Until cutover, the client keeps using Purelymail hosts for the Vanguarda goblin.
 
+## goblind (server)
+
+In-tree: SMTP inbound + submission, IMAP, Maildir, lab TLS, **outbound MX worker** (port 25, queue retries, no DSN), **DKIM** (`goblind dkim init`, selector `goblin`). No Postfix / OpenDKIM / smart-host.
+
 ## Later (not this phase)
 
-- `goblind` SMTP/IMAP + DKIM on this machine → office PC
-- Squarespace MX cutover (DOMAIN.md checklist)
+- Squarespace MX cutover (DOMAIN.md checklist) — do not flip production MX until lab smoke is green
 - HTML compose, Bcc, drafts, Sent IMAP APPEND
 - `sky prepare` / `sky check`
 - UID namespaces per folder/account (avoid cross-folder UID collisions in the local cache)

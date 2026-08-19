@@ -36,6 +36,10 @@ crossterm = "0.28"
 base64 = "0.22"
 rustls-pemfile = "2"
 rcgen = "0.13"
+hickory-resolver = "0.24"
+rand = "0.8"
+rsa = { version = "0.9", features = ["pem", "sha2"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

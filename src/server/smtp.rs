@@ -4,12 +4,11 @@ use super::auth;
 use super::config;
 use super::maildir;
 use super::paths;
+use super::queue;
 use crate::error::Error;
-use crate::fsutil;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::server::TlsStream;
@@ -407,12 +406,14 @@ fn finish_data(st: &State, data: &[u8]) -> Result<(), Error> {
             }
         }
         Kind::Submission => {
-            enqueue(&from, &st.rcpt, st.user.as_deref(), data)?;
-            if let Ok(file) = config::load_or_empty() {
-                for rcpt in &st.rcpt {
-                    if let Ok(u) = file.user(rcpt) {
-                        maildir::deliver(&paths::user_maildir(&u.maildir), data)?;
-                    }
+            let file = config::load_or_empty()?;
+            let external = outbound_rcpts(&file, &st.rcpt);
+            if !external.is_empty() {
+                queue::enqueue(&from, &external, st.user.as_deref(), data)?;
+            }
+            for rcpt in &st.rcpt {
+                if let Ok(u) = file.user(rcpt) {
+                    maildir::deliver(&paths::user_maildir(&u.maildir), data)?;
                 }
             }
         }
@@ -420,30 +421,12 @@ fn finish_data(st: &State, data: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-fn enqueue(from: &str, to: &[String], user: Option<&str>, raw: &[u8]) -> Result<(), Error> {
-    paths::ensure_layout()?;
-    let dir = paths::queue_dir();
-    let id = unique_queue_id();
-    let env = serde_json::json!({
-        "from": from,
-        "to": to,
-        "user": user,
-    });
-    let json = serde_json::to_string_pretty(&env)?;
-    fsutil::write_private(
-        dir.join(format!("{id}.json")).as_path(),
-        format!("{json}\n").as_bytes(),
-    )?;
-    fsutil::write_private(dir.join(format!("{id}.eml")).as_path(), raw)?;
-    Ok(())
-}
-
-fn unique_queue_id() -> String {
-    let t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{t}.{}", std::process::id())
+fn outbound_rcpts(file: &config::AccountFile, rcpts: &[String]) -> Vec<String> {
+    rcpts
+        .iter()
+        .filter(|r| !file.accepts_recipient(r))
+        .cloned()
+        .collect()
 }
 
 async fn read_data(io: &mut SmtpIo) -> Result<Vec<u8>, Error> {
@@ -616,5 +599,22 @@ mod tests {
         );
         assert_eq!(parse_path("FROM:<>", "FROM").unwrap(), "");
         assert!(parse_path("FROM:<not-an-addr>", "FROM").is_none());
+    }
+
+    #[test]
+    fn outbound_skips_local_mailboxes() {
+        let file = config::AccountFile {
+            domain: "vanguardaautomovel.com".into(),
+            users: vec![config::User {
+                address: "design@vanguardaautomovel.com".into(),
+                maildir: "mail/design".into(),
+            }],
+        };
+        let rcpts = vec![
+            "design@vanguardaautomovel.com".into(),
+            "out@example.com".into(),
+        ];
+        assert_eq!(outbound_rcpts(&file, &rcpts), vec!["out@example.com"]);
+        assert!(outbound_rcpts(&file, &["design@vanguardaautomovel.com".into()]).is_empty());
     }
 }

@@ -3,9 +3,12 @@
 pub mod args;
 pub mod auth;
 pub mod config;
+pub mod dkim;
 pub mod imap;
 pub mod maildir;
+pub mod outbox;
 pub mod paths;
+pub mod queue;
 pub mod sky;
 pub mod smtp;
 pub mod tlsutil;
@@ -32,6 +35,9 @@ pub fn run(args: Args) -> Result<u8, Error> {
                 sky::print_dns(&domain, mail_host.as_deref());
                 Ok(0)
             }
+        },
+        Cmd::Dkim { action } => match action {
+            args::DkimCmd::Init { selector } => cmd_dkim_init(&selector),
         },
     }
 }
@@ -95,8 +101,21 @@ async fn serve(bind: String, smtp_in: u16, smtp_sub: u16, imap: u16) -> Result<u
         implicit_sub,
     ));
     tokio::spawn(imap::accept_loop(imap_l, tls));
+    tokio::spawn(outbox::worker());
     tokio::signal::ctrl_c().await.map_err(Error::Io)?;
     eprintln!("goblind: stopping");
+    Ok(0)
+}
+
+fn cmd_dkim_init(selector: &str) -> Result<u8, Error> {
+    paths::ensure_layout()?;
+    dkim::init(selector)?;
+    println!(
+        "wrote {} and {}",
+        dkim::private_path(selector).display(),
+        dkim::public_path(selector).display()
+    );
+    println!("next: goblind sky print-dns DOMAIN");
     Ok(0)
 }
 

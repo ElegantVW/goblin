@@ -40,6 +40,11 @@ pub enum Cmd {
         #[command(subcommand)]
         action: SkyCmd,
     },
+    /// DKIM keys (our signer — no OpenDKIM)
+    Dkim {
+        #[command(subcommand)]
+        action: DkimCmd,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -68,5 +73,14 @@ pub enum SkyCmd {
         /// Hostname for MX / A (default: mail.DOMAIN)
         #[arg(long)]
         mail_host: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DkimCmd {
+    /// Generate RSA-2048 key + DNS TXT (selector default: goblin)
+    Init {
+        #[arg(long, default_value = "goblin")]
+        selector: String,
     },
 }

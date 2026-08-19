@@ -48,7 +48,7 @@ Lower TTL on MX/A a day ahead. Then Custom records approximately:
 | A / AAAA | `mail` | public IPv4 / IPv6 of the goblind host |
 | MX | `@` | `mail.vanguardaautomovel.com` (priority 10) |
 | TXT | `@` | `v=spf1 mx a:mail.vanguardaautomovel.com -all` (tune) |
-| TXT | `._domainkey` / selector | DKIM public key from goblind |
+| TXT | `goblin._domainkey` | DKIM public key from `goblind dkim init` / `sky print-dns` |
 | TXT | `_dmarc` | `v=DMARC1; p=none; rua=mailto:design@…` (start with `p=none`) |
 
 Remove Purelymail MX/SPF/DKIM only after:
@@ -64,17 +64,26 @@ Optional dual-MX during trial: keep Purelymail at a worse priority, or run a sho
 `goblind` is **our** Rust binary in this repo (not Postfix/Dovecot/Purelymail). Data default: `GOBLIND_HOME` or the platform local-data dir for `goblind`.
 
 ```bash
-# DNS recipe for Squarespace (human paste — no API)
-goblind sky print-dns vanguardaautomovel.com
-
 # Mailbox (password never in accounts.json)
 export GOBLIND_HOME=/path/to/goblind-data   # optional isolation
 goblind user add design@vanguardaautomovel.com
 goblind user list
 
-# Run listeners (submission 465 or 587; IMAP 993 — goblin client TLS ports)
+# DKIM (selector goblin) then paste the TXT — do not flip MX yet
+goblind dkim init
+goblind sky print-dns vanguardaautomovel.com
+
+# Run listeners + outbound worker (submission 465 or 587; IMAP 993)
 goblind run --bind 0.0.0.0 --smtp-in 25 --smtp-sub 465 --imap 993
 ```
+
+Outbound is **ours**: a queue worker talks to the recipient MX on port 25 and signs with our DKIM. No Postfix, no OpenDKIM, no smart-host.
+
+- Local recipients stay in Maildir; only **external** addresses are queued.
+- Failures retry (60s × 2^n, cap 1h, 8 attempts) then `queue/failed/` + `queue/failed.log`. No DSN bounce is generated.
+- If port 25 outbound is blocked (common on residential/office ISPs), move `goblind` to a VPS or other unblocked IP. There is no relay code to add.
+
+Still coming: systemd unit, MX cutover smoke. **Do not flip production MX** until lab steal+send is green.
 
 Lab CA is `$GOBLIND_HOME/tls/ca.pem`. Point the client at it so verification stays on (no insecure flag):
 
@@ -86,7 +95,5 @@ goblin send --to design@vanguardaautomovel.com --subject "lab" --body-file msg.t
 ```
 
 Binding 25/465/993 needs root, `CAP_NET_BIND_SERVICE`, or a lowered `net.ipv4.ip_unprivileged_port_start`.
-
-Still coming: DKIM signing, systemd unit, MX cutover smoke.
 
 Registrar renewals, nameservers, and transfers stay in Squarespace. If you need API-driven DNS, move nameservers to Cloudflare (or similar) — that is optional and separate.

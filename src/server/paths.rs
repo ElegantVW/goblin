@@ -36,6 +36,10 @@ pub fn queue_dir() -> PathBuf {
     home().join("queue")
 }
 
+pub fn queue_failed_dir() -> PathBuf {
+    queue_dir().join("failed")
+}
+
 pub fn dkim_dir() -> PathBuf {
     home().join("dkim")
 }
@@ -47,7 +51,7 @@ pub fn tls_dir() -> PathBuf {
 pub fn ensure_layout() -> Result<(), Error> {
     let h = home();
     fsutil::mkdir_private(&h)?;
-    for sub in ["mail", "queue", "dkim", "tls"] {
+    for sub in ["mail", "queue", "queue/failed", "dkim", "tls"] {
         fsutil::mkdir_private(&h.join(sub))?;
     }
     Ok(())
@@ -101,6 +105,7 @@ mod tests {
             assert_eq!(maildir_root(), dir.path().join("mail"));
             ensure_layout().unwrap();
             assert!(dir.path().join("queue").is_dir());
+            assert!(dir.path().join("queue").join("failed").is_dir());
         });
     }
 }
