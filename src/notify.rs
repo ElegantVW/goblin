@@ -32,11 +32,27 @@ pub fn play() -> bool {
 }
 
 pub fn play_path(path: &Path) -> bool {
+    if cfg!(target_os = "windows") {
+        return Command::new("cmd")
+            .args(["/C", "start", "/min", ""])
+            .arg(path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
     let players: &[&[&str]] = if cfg!(target_os = "macos") {
         &[&["afplay"]]
     } else {
         &[
-            &["mpv", "--no-video", "--no-config", "--volume=85", "--really-quiet"],
+            &[
+                "mpv",
+                "--no-video",
+                "--no-config",
+                "--volume=85",
+                "--really-quiet",
+            ],
             &["pw-play"],
             &["paplay"],
             &["aplay", "-q"],

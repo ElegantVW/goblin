@@ -1,8 +1,10 @@
 //! House chrome — port of faeos `fae_termart` box / tui_* (no Python at runtime).
 
 use std::io::Write;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::Mutex;
+
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
 pub const RESET: &str = "\x1b[0m";
 pub const BOLD: &str = "\x1b[1m";
@@ -18,14 +20,23 @@ pub const OK: &str = "\x1b[38;5;78m";
 pub const WARN: &str = "\x1b[38;5;214m";
 pub const ERR: &str = "\x1b[38;5;197m";
 
+#[cfg(unix)]
 const ENTER_ALT: &str = "\x1b[?1049h\x1b[?25l";
+#[cfg(unix)]
 const LEAVE_ALT: &str = "\x1b[?25h\x1b[?7h\x1b[?1049l";
+#[cfg(unix)]
 const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
-const TUI_HYGIENE: &str = "\x1b[0m\x1b[?25h\x1b[?7h\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+#[cfg(unix)]
+const TUI_HYGIENE: &str =
+    "\x1b[0m\x1b[?25h\x1b[?7h\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 
 static FORCE_COLOR: Mutex<bool> = Mutex::new(false);
+static FORCE_UNICODE: Mutex<Option<bool>> = Mutex::new(None);
+
+#[cfg(unix)]
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 
+#[cfg(unix)]
 struct Session {
     fd: RawFd,
     owned: Option<OwnedFd>,
@@ -37,19 +48,47 @@ pub fn set_force_color(on: bool) {
     *FORCE_COLOR.lock().unwrap() = on;
 }
 
+pub fn set_force_unicode(on: bool) {
+    *FORCE_UNICODE.lock().unwrap() = Some(on);
+}
+
+pub fn stdout_is_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal() || std::io::stderr().is_terminal()
+}
+
 pub fn color_ok() -> bool {
     if *FORCE_COLOR.lock().unwrap() {
         return true;
     }
-    if std::env::var("NO_COLOR").map(|v| !v.trim().is_empty()).unwrap_or(false) {
+    if std::env::var("NO_COLOR")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+    {
         return false;
     }
     for k in ["FORCE_COLOR", "CLICOLOR_FORCE"] {
-        if std::env::var(k).map(|v| !v.trim().is_empty()).unwrap_or(false) {
+        if std::env::var(k)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+        {
             return true;
         }
     }
-    unsafe { libc::isatty(1) == 1 || libc::isatty(2) == 1 }
+    stdout_is_tty()
+}
+
+pub fn unicode_ok() -> bool {
+    if let Some(on) = *FORCE_UNICODE.lock().unwrap() {
+        return on;
+    }
+    match std::env::var("PIXIE_UNICODE") {
+        Ok(v) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "on" | "true" | "yes" | "unicode"
+        ),
+        Err(_) => false,
+    }
 }
 
 pub fn paint(text: &str, codes: &[&str]) -> String {
@@ -141,13 +180,7 @@ pub fn vis_len(s: &str) -> usize {
 }
 
 pub fn ascii_box_enabled() -> bool {
-    match std::env::var("PIXIE_UNICODE") {
-        Ok(v) => !matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "1" | "on" | "true" | "yes" | "unicode"
-        ),
-        Err(_) => true,
-    }
+    !unicode_ok()
 }
 
 pub fn pad_vis(s: &str, width: usize) -> String {
@@ -350,6 +383,7 @@ pub fn line_count(frame: &str) -> usize {
     }
 }
 
+#[cfg(unix)]
 #[repr(C)]
 struct Winsize {
     ws_row: u16,
@@ -358,6 +392,7 @@ struct Winsize {
     ws_ypixel: u16,
 }
 
+#[cfg(unix)]
 pub fn winsize(fd: Option<RawFd>) -> (u16, u16) {
     let mut candidates: Vec<RawFd> = Vec::new();
     if let Some(fd) = fd {
@@ -381,6 +416,11 @@ pub fn winsize(fd: Option<RawFd>) -> (u16, u16) {
             return (ws.ws_col, ws.ws_row);
         }
     }
+    (80, 24)
+}
+
+#[cfg(not(unix))]
+fn winsize(_fd: Option<i32>) -> (u16, u16) {
     (80, 24)
 }
 
@@ -449,6 +489,7 @@ pub fn decode_byte(ch: u8) -> String {
     }
 }
 
+#[cfg(unix)]
 fn poll_in(fd: RawFd, timeout_ms: i32) -> bool {
     let mut pfd = libc::pollfd {
         fd,
@@ -458,6 +499,7 @@ fn poll_in(fd: RawFd, timeout_ms: i32) -> bool {
     unsafe { libc::poll(&mut pfd, 1, timeout_ms) > 0 }
 }
 
+#[cfg(unix)]
 fn read_byte(fd: RawFd) -> Option<u8> {
     let mut buf = [0u8; 1];
     let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut _, 1) };
@@ -468,6 +510,7 @@ fn read_byte(fd: RawFd) -> Option<u8> {
     }
 }
 
+#[cfg(unix)]
 pub fn tui_open_tty() -> Option<RawFd> {
     let path = std::ffi::CString::new("/dev/tty").ok()?;
     let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
@@ -485,6 +528,12 @@ pub fn tui_open_tty() -> Option<RawFd> {
     None
 }
 
+#[cfg(not(unix))]
+pub fn tui_open_tty() -> Option<i32> {
+    None
+}
+
+#[cfg(unix)]
 fn set_cbreak(fd: RawFd) -> Result<libc::termios, ()> {
     let mut old = unsafe { std::mem::zeroed::<libc::termios>() };
     if unsafe { libc::tcgetattr(fd, &mut old) } != 0 {
@@ -511,6 +560,7 @@ fn set_cbreak(fd: RawFd) -> Result<libc::termios, ()> {
     Ok(old)
 }
 
+#[cfg(unix)]
 fn write_raw(fd: RawFd, text: &str) {
     let data = text.as_bytes();
     let mut off = 0;
@@ -523,6 +573,7 @@ fn write_raw(fd: RawFd, text: &str) {
     }
 }
 
+#[cfg(unix)]
 pub fn paint_frame(fd: RawFd, body: &str) {
     let prefix = "\x1b[H\x1b[2J\x1b[?7l";
     write_raw(fd, prefix);
@@ -539,6 +590,10 @@ pub fn paint_frame(fd: RawFd, body: &str) {
     write_raw(fd, &body);
 }
 
+#[cfg(not(unix))]
+pub fn paint_frame(_fd: i32, _body: &str) {}
+
+#[cfg(unix)]
 fn pixie_screen_hold(on: bool, name: &str) {
     let bin = directories::BaseDirs::new()
         .map(|b| b.home_dir().join("bin").join("pixie-screen"))
@@ -566,6 +621,7 @@ fn pixie_screen_hold(on: bool, name: &str) {
     }
 }
 
+#[cfg(unix)]
 pub fn tui_begin(fd: RawFd, hold_name: &str) {
     set_force_color(true);
     let old = set_cbreak(fd).unwrap_or_else(|_| unsafe { std::mem::zeroed() });
@@ -584,6 +640,10 @@ pub fn tui_begin(fd: RawFd, hold_name: &str) {
     });
 }
 
+#[cfg(not(unix))]
+pub fn tui_begin(_fd: i32, _hold_name: &str) {}
+
+#[cfg(unix)]
 pub fn tui_cleanup() {
     let mut g = SESSION.lock().unwrap();
     let Some(sess) = g.take() else {
@@ -602,10 +662,15 @@ pub fn tui_cleanup() {
     drop(sess.owned);
 }
 
+#[cfg(not(unix))]
+pub fn tui_cleanup() {}
+
+#[cfg(unix)]
 pub fn tui_fd() -> Option<RawFd> {
     SESSION.lock().unwrap().as_ref().map(|s| s.fd)
 }
 
+#[cfg(unix)]
 pub fn tui_read_key(fd: RawFd, timeout_ms: Option<i32>) -> String {
     if let Some(ms) = timeout_ms {
         if !poll_in(fd, ms) {
@@ -658,6 +723,12 @@ pub fn tui_read_key(fd: RawFd, timeout_ms: Option<i32>) -> String {
     decode_byte(ch)
 }
 
+#[cfg(not(unix))]
+pub fn tui_read_key(_fd: i32, _timeout_ms: Option<i32>) -> String {
+    String::new()
+}
+
+#[cfg(unix)]
 pub fn tui_suspend() {
     if let Some(sess) = SESSION.lock().unwrap().as_ref() {
         unsafe {
@@ -668,6 +739,7 @@ pub fn tui_suspend() {
     }
 }
 
+#[cfg(unix)]
 pub fn tui_resume() {
     if let Some(sess) = SESSION.lock().unwrap().as_ref() {
         let _ = set_cbreak(sess.fd);
@@ -678,6 +750,7 @@ pub fn tui_resume() {
 
 /// Open $EDITOR on a temp file; restore TUI after.
 pub fn edit_temp(body: &str) -> Result<String, String> {
+    #[cfg(unix)]
     tui_suspend();
     let path = std::env::temp_dir().join(format!("goblin-draft-{}.txt", std::process::id()));
     std::fs::write(&path, body).map_err(|e| e.to_string())?;
@@ -694,6 +767,7 @@ pub fn edit_temp(body: &str) -> Result<String, String> {
         .map_err(|e| format!("{editor}: {e}"))?;
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let _ = std::fs::remove_file(&path);
+    #[cfg(unix)]
     tui_resume();
     if !status.success() {
         return Err(format!("{editor} exited {status}"));
@@ -714,19 +788,12 @@ mod tests {
 
     fn with_unicode<T>(on: bool, f: impl FnOnce() -> T) -> T {
         let _g = ENV.lock().unwrap();
-        let prev = std::env::var("PIXIE_UNICODE").ok();
-        if on {
-            std::env::set_var("PIXIE_UNICODE", "1");
-        } else {
-            std::env::remove_var("PIXIE_UNICODE");
-        }
+        let prev = *FORCE_UNICODE.lock().unwrap();
+        set_force_unicode(on);
         set_force_color(true);
         let r = f();
         set_force_color(false);
-        match prev {
-            Some(v) => std::env::set_var("PIXIE_UNICODE", v),
-            None => std::env::remove_var("PIXIE_UNICODE"),
-        }
+        *FORCE_UNICODE.lock().unwrap() = prev;
         r
     }
 

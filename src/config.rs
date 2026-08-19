@@ -96,7 +96,7 @@ pub fn find_preset(id: &str) -> Option<&'static NestPreset> {
 pub fn apply_preset(id: &str, name: &str, from: &str, user: &str) -> Result<Account, Error> {
     let p = find_preset(id).ok_or_else(|| {
         Error::say(
-            format!("unknown nest {id:?}"),
+            format!("unknown sky {id:?}"),
             "try: purelymail, google, disroot, outlook, yahoo",
         )
     })?;

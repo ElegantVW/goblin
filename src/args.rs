@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(
     name = "goblin",
-    about = "goblin — steals letters into his nest. ask him.",
+    about = "goblin — steals letters for the horde. ask him.",
     disable_help_subcommand = true
 )]
 pub struct Args {
@@ -127,7 +127,7 @@ pub enum Cmd {
         #[arg(long)]
         set: Option<PathBuf>,
     },
-    /// Hunt through the nest
+    /// Hunt through the horde
     #[command(name = "hunt", alias = "search")]
     Hunt {
         query: Vec<String>,

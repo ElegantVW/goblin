@@ -8,7 +8,7 @@ use crate::paths;
 use crate::smtp;
 use crate::store::{MailBox, MailMeta, Store};
 use crate::{secrets, AccountCmd, AttachCmd, Cmd};
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub fn dispatch(cmd: Cmd) -> Result<u8, Error> {
@@ -152,8 +152,8 @@ fn cmd_account_use(name: &str) -> Result<u8, Error> {
 fn cmd_account_add(preset: Option<&str>) -> Result<u8, Error> {
     if !stdin_is_tty() {
         return Err(Error::say(
-            "nest add needs a real terminal",
-            "run: goblin nest add",
+            "summon needs a real terminal",
+            "run: goblin summon",
         ));
     }
     let preset = match preset {
@@ -162,7 +162,7 @@ fn cmd_account_add(preset: Option<&str>) -> Result<u8, Error> {
     };
     let preset = preset.filter(|s| s != "other");
 
-    let name = prompt("nest name", Some("work"))?;
+    let name = prompt("goblin name", Some("work"))?;
     let from = prompt("your name and email (Ada <ada@example.com>)", None)?;
     let user = prompt("email address", extract_addr(&from).as_deref())?;
 
@@ -203,7 +203,7 @@ fn cmd_account_add(preset: Option<&str>) -> Result<u8, Error> {
         .unwrap_or("password: ");
     let password = read_password(pw_hint)?;
     if password.is_empty() {
-        return Err(Error::say("empty password", "try nest add again"));
+        return Err(Error::say("empty password", "try goblin summon again"));
     }
     let n = acc.name.clone();
     save_account(acc, &password, file_is_empty())?;
@@ -220,7 +220,7 @@ fn file_is_empty() -> bool {
 }
 
 fn pick_nest() -> Result<String, Error> {
-    eprintln!("which nest?");
+    eprintln!("which sky?");
     for (i, p) in config::NEST_PRESETS.iter().enumerate() {
         eprintln!("  {}  {}", i + 1, p.id);
     }
@@ -238,7 +238,7 @@ fn pick_nest() -> Result<String, Error> {
         return Ok(raw);
     }
     Err(Error::say(
-        "unknown nest",
+        "unknown sky",
         "pick 1-5, or: purelymail, google, disroot, outlook, yahoo",
     ))
 }
@@ -328,7 +328,10 @@ fn cmd_import_aerc(file: Option<PathBuf>) -> Result<u8, Error> {
             .unwrap_or_else(|| PathBuf::from("/nonexistent"))
     });
     if !path.is_file() {
-        return Err(Error::Usage(format!("no aerc config at {}", path.display())));
+        return Err(Error::Usage(format!(
+            "no aerc config at {}",
+            path.display()
+        )));
     }
     let imported = import_aerc::import_aerc(&path)?;
     let acc = imported.account;
@@ -393,7 +396,9 @@ fn cmd_sync(
     write_state(result.written)?;
     if result.written > 0 && !no_notify {
         if !notify::play() {
-            eprintln!("(new mail! goblin wants to squeak — drop a sound at ~/.config/goblin/notify.mp3)");
+            eprintln!(
+                "(new mail! goblin wants to squeak — drop a sound at ~/.config/goblin/notify.mp3)"
+            );
         }
     }
     Ok(0)
@@ -582,17 +587,31 @@ fn cmd_move(dest: &str, files: Vec<String>, all: bool, local_only: bool) -> Resu
             }
         }
         store.move_mail(&path, dest)?;
-        println!("moved {} → {}/  ({server_msg})", path.file_name().unwrap().to_string_lossy(), dest.as_str());
+        println!(
+            "moved {} → {}/  ({server_msg})",
+            path.file_name().unwrap().to_string_lossy(),
+            dest.as_str()
+        );
     }
     Ok(0)
 }
 
-fn cmd_send(to: &str, subject: &str, cc: Option<&str>, body_file: Option<&Path>) -> Result<u8, Error> {
+fn cmd_send(
+    to: &str,
+    subject: &str,
+    cc: Option<&str>,
+    body_file: Option<&Path>,
+) -> Result<u8, Error> {
     let (acc, password) = load_default_account()?;
     crate::tls::smtp_mode(acc.smtp.port)?;
     let body = read_body(body_file)?;
     let ccs: Vec<String> = cc
-        .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .map(|s| {
+            s.split(',')
+                .map(|x| x.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
         .unwrap_or_default();
     let mut rcpts = vec![to.to_string()];
     rcpts.extend(ccs.iter().cloned());
@@ -686,7 +705,10 @@ fn cmd_attach(action: AttachCmd) -> Result<u8, Error> {
             }
             if files.is_empty() {
                 for (i, name) in m.attachments.iter().enumerate() {
-                    println!("[{:>2}] {name}  (not on disk — re-sync with --force)", i + 1);
+                    println!(
+                        "[{:>2}] {name}  (not on disk — re-sync with --force)",
+                        i + 1
+                    );
                 }
                 return Ok(0);
             }
@@ -832,7 +854,7 @@ fn prompt(label: &str, default: Option<&str>) -> Result<String, Error> {
 }
 
 fn stdin_is_tty() -> bool {
-    unsafe { libc::isatty(libc::STDIN_FILENO) == 1 }
+    std::io::stdin().is_terminal()
 }
 
 fn read_password(prompt: &str) -> Result<String, Error> {
@@ -841,20 +863,30 @@ fn read_password(prompt: &str) -> Result<String, Error> {
     if !stdin_is_tty() {
         return Err(Error::Usage("password prompt needs a tty".into()));
     }
-    unsafe {
-        let fd = libc::STDIN_FILENO;
-        let mut old: libc::termios = std::mem::zeroed();
-        if libc::tcgetattr(fd, &mut old) != 0 {
-            return Err(Error::Usage("password prompt needs a tty".into()));
+    #[cfg(unix)]
+    {
+        unsafe {
+            let fd = libc::STDIN_FILENO;
+            let mut old: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(fd, &mut old) != 0 {
+                return Err(Error::Usage("password prompt needs a tty".into()));
+            }
+            let mut new = old;
+            new.c_lflag &= !libc::ECHO;
+            libc::tcsetattr(fd, libc::TCSANOW, &new);
+            let mut line = String::new();
+            let res = io::stdin().lock().read_line(&mut line);
+            libc::tcsetattr(fd, libc::TCSANOW, &old);
+            eprintln!();
+            res?;
+            Ok(line.trim_end_matches(['\n', '\r']).to_string())
         }
-        let mut new = old;
-        new.c_lflag &= !libc::ECHO;
-        libc::tcsetattr(fd, libc::TCSANOW, &new);
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows: echo stays on this gate (no extra crates). CLI still works.
         let mut line = String::new();
-        let res = io::stdin().lock().read_line(&mut line);
-        libc::tcsetattr(fd, libc::TCSANOW, &old);
-        eprintln!();
-        res?;
+        io::stdin().lock().read_line(&mut line)?;
         Ok(line.trim_end_matches(['\n', '\r']).to_string())
     }
 }
@@ -878,7 +910,11 @@ mod tests {
             ..MailMeta::default()
         };
         store
-            .write_mail(MailBox::Unread, &meta, "secret body s3cret-not-a-password-field")
+            .write_mail(
+                MailBox::Unread,
+                &meta,
+                "secret body s3cret-not-a-password-field",
+            )
             .unwrap();
         let json = serde_json::to_string(&acc).unwrap();
         assert!(!json.contains("password"));
@@ -894,6 +930,9 @@ mod tests {
             ));
         }
         assert!(!plain.contains("password"));
-        assert!(!plain.contains(&secrets::load_password("ada@x").unwrap_or_default()) || secrets::load_password("ada@x").is_err());
+        assert!(
+            !plain.contains(&secrets::load_password("ada@x").unwrap_or_default())
+                || secrets::load_password("ada@x").is_err()
+        );
     }
 }
