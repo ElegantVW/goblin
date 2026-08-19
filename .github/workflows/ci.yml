@@ -1,0 +1,27 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: test
+        run: cargo test
+      - name: no openssl / no dbus in default tree
+        if: runner.os != 'Windows'
+        run: |
+          if cargo tree -i openssl >/dev/null 2>&1; then echo "openssl in tree"; exit 1; fi
+          if cargo tree -i libdbus-sys >/dev/null 2>&1; then echo "libdbus-sys in default tree"; exit 1; fi
