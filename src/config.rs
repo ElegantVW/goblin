@@ -156,6 +156,27 @@ impl AccountFile {
             .find(|a| a.name == self.default)
             .ok_or_else(|| Error::Config(format!("default account {:?} not found", self.default)))
     }
+
+    pub fn account(&self, name: &str) -> Result<&Account, Error> {
+        self.accounts
+            .iter()
+            .find(|a| a.name == name)
+            .ok_or_else(|| Error::Config(format!("no account named {name:?}")))
+    }
+
+    pub fn upsert(&mut self, acc: Account) {
+        if let Some(slot) = self.accounts.iter_mut().find(|a| a.name == acc.name) {
+            *slot = acc;
+        } else {
+            self.accounts.push(acc);
+        }
+    }
+
+    pub fn set_default(&mut self, name: &str) -> Result<(), Error> {
+        self.account(name)?;
+        self.default = name.to_string();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -216,6 +237,26 @@ mod tests {
             Error::Config(s) => assert!(s.contains("password"), "{s}"),
             other => panic!("expected Config, got {other}"),
         }
+    }
+
+    #[test]
+    fn upsert_keeps_existing_and_can_switch_default() {
+        let mut file = sample();
+        file.upsert(purelymail_preset(
+            "home",
+            "Ada <ada@home>",
+            "ada@home",
+        ));
+        assert_eq!(file.accounts.len(), 2);
+        file.set_default("home").unwrap();
+        assert_eq!(file.default, "home");
+        file.upsert(purelymail_preset(
+            "work",
+            "Ada <ada@work>",
+            "ada@work",
+        ));
+        assert_eq!(file.accounts.len(), 2);
+        assert_eq!(file.account("work").unwrap().from, "Ada <ada@work>");
     }
 
     #[test]

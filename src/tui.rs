@@ -1,6 +1,6 @@
 //! House TUI: stacked fae_termart boxes + Runes. No ratatui. No Python.
 
-use crate::cli::{self, load_default_account};
+use crate::cli::{self, load_accounts_file, load_default_account, load_named_account, open_path};
 use crate::compose;
 use crate::error::Error;
 use crate::imap::{self, SyncOpts};
@@ -29,7 +29,7 @@ struct Draft {
 
 enum Screen {
     List,
-    Reader { scroll: usize },
+    Reader { scroll: usize, attach_sel: usize },
     Compose { draft: Draft, confirm_quit: bool },
 }
 
@@ -41,6 +41,9 @@ struct App {
     screen: Screen,
     mails: Vec<MailMeta>,
     acc_name: String,
+    acc_names: Vec<String>,
+    query: String,
+    searching: bool,
 }
 
 pub fn run() -> Result<u8, Error> {
@@ -58,9 +61,13 @@ pub fn run() -> Result<u8, Error> {
         });
     };
     art::tui_begin(fd, "goblin");
-    let acc_name = load_default_account()
-        .map(|(a, _)| a.name)
-        .unwrap_or_else(|_| "goblin".into());
+    let (acc_name, acc_names) = match load_accounts_file() {
+        Ok(f) => (
+            f.default.clone(),
+            f.accounts.into_iter().map(|a| a.name).collect(),
+        ),
+        Err(_) => ("goblin".into(), Vec::new()),
+    };
     let store = Store::default_store();
     let _ = store.ensure();
     let mut app = App {
@@ -71,6 +78,9 @@ pub fn run() -> Result<u8, Error> {
         screen: Screen::List,
         mails: Vec::new(),
         acc_name,
+        acc_names,
+        query: String::new(),
+        searching: false,
     };
     app.reload();
     let result = event_loop(&mut app, fd);
@@ -99,22 +109,64 @@ fn handle_key(app: &mut App, key: &str) -> Result<bool, Error> {
 }
 
 fn handle_list(app: &mut App, key: &str) -> Result<bool, Error> {
+    if app.searching {
+        match key {
+            "esc" => {
+                app.searching = false;
+                app.query.clear();
+                app.sel = 0;
+            }
+            "enter" => app.searching = false,
+            "backspace" => {
+                app.query.pop();
+                app.sel = 0;
+            }
+            k if k.chars().count() == 1 && !k.starts_with("ctrl-") => {
+                app.query.push_str(k);
+                app.sel = 0;
+            }
+            _ => {}
+        }
+        return Ok(false);
+    }
     match key {
-        "q" | "esc" | "ctrl-c" => return Ok(true),
+        "q" | "ctrl-c" => return Ok(true),
+        "esc" if !app.query.is_empty() => {
+            app.query.clear();
+            app.sel = 0;
+            return Ok(false);
+        }
+        "esc" => return Ok(true),
+        "/" => {
+            app.searching = true;
+            app.query.clear();
+            app.sel = 0;
+            return Ok(false);
+        }
+        "[" => {
+            cycle_account(app, -1);
+            return Ok(false);
+        }
+        "]" => {
+            cycle_account(app, 1);
+            return Ok(false);
+        }
         "j" | "down" => {
-            if app.sel + 1 < app.mails.len() {
+            let n = visible(app).len();
+            if app.sel + 1 < n {
                 app.sel += 1;
             }
         }
         "k" | "up" => app.sel = app.sel.saturating_sub(1),
         "home" => app.sel = 0,
-        "end" => app.sel = app.mails.len().saturating_sub(1),
+        "end" => app.sel = visible(app).len().saturating_sub(1),
         "pgdn" | "space" => {
-            app.sel = (app.sel + 10).min(app.mails.len().saturating_sub(1));
+            let n = visible(app).len();
+            app.sel = (app.sel + 10).min(n.saturating_sub(1));
         }
         "pgup" => app.sel = app.sel.saturating_sub(10),
         "enter" | "o" => {
-            if !app.mails.is_empty() {
+            if !visible(app).is_empty() {
                 open_selected(app)?;
             }
         }
@@ -144,31 +196,40 @@ fn handle_list(app: &mut App, key: &str) -> Result<bool, Error> {
 }
 
 fn handle_reader(app: &mut App, key: &str) -> Result<bool, Error> {
-    let n = app.mails.len();
+    let n = visible(app).len();
     match key {
         "q" | "esc" | "left" | "ctrl-c" => app.screen = Screen::List,
+        "a" => open_selected_attachment(app)?,
+        "n" => {
+            let n = current_mail(app).map(|m| m.attachments.len()).unwrap_or(0);
+            if let Screen::Reader { attach_sel, .. } = &mut app.screen {
+                if n > 0 {
+                    *attach_sel = (*attach_sel + 1) % n;
+                }
+            }
+        }
         "j" | "down" | "space" => {
-            if let Screen::Reader { scroll } = &mut app.screen {
+            if let Screen::Reader { scroll, .. } = &mut app.screen {
                 *scroll = scroll.saturating_add(1);
             }
         }
         "k" | "up" => {
-            if let Screen::Reader { scroll } = &mut app.screen {
+            if let Screen::Reader { scroll, .. } = &mut app.screen {
                 *scroll = scroll.saturating_sub(1);
             }
         }
         "pgdn" => {
-            if let Screen::Reader { scroll } = &mut app.screen {
+            if let Screen::Reader { scroll, .. } = &mut app.screen {
                 *scroll = scroll.saturating_add(10);
             }
         }
         "pgup" => {
-            if let Screen::Reader { scroll } = &mut app.screen {
+            if let Screen::Reader { scroll, .. } = &mut app.screen {
                 *scroll = scroll.saturating_sub(10);
             }
         }
         "home" => {
-            if let Screen::Reader { scroll } = &mut app.screen {
+            if let Screen::Reader { scroll, .. } = &mut app.screen {
                 *scroll = 0;
             }
         }
@@ -315,6 +376,7 @@ fn send_draft(app: &mut App) -> Result<bool, Error> {
                 date: chrono::Utc::now().to_rfc2822(),
                 subject: draft.subject.clone(),
                 message_id: String::new(),
+                attachments: Vec::new(),
                 path: None,
                 body: String::new(),
             };
@@ -328,10 +390,76 @@ fn send_draft(app: &mut App) -> Result<bool, Error> {
     Ok(false)
 }
 
-fn open_selected(app: &mut App) -> Result<(), Error> {
-    let Some(m) = app.mails.get(app.sel).cloned() else {
+fn visible(app: &App) -> Vec<(MailBox, MailMeta)> {
+    if app.query.trim().is_empty() {
+        app.mails
+            .iter()
+            .cloned()
+            .map(|m| (app.box_name, m))
+            .collect()
+    } else {
+        crate::search::search_store(&app.store, &app.query).unwrap_or_default()
+    }
+}
+
+fn current_mail(app: &App) -> Option<MailMeta> {
+    match &app.screen {
+        Screen::Reader { .. } | Screen::List => visible(app).get(app.sel).map(|(_, m)| m.clone()),
+        Screen::Compose { draft, .. } => draft.reply_to.clone(),
+    }
+}
+
+fn cycle_account(app: &mut App, dir: i32) {
+    if app.acc_names.is_empty() {
+        return;
+    }
+    let i = app
+        .acc_names
+        .iter()
+        .position(|n| n == &app.acc_name)
+        .unwrap_or(0);
+    let n = app.acc_names.len() as i32;
+    let next = ((i as i32 + dir).rem_euclid(n)) as usize;
+    let name = app.acc_names[next].clone();
+    let path = crate::paths::accounts_file();
+    if path.exists() {
+        if let Ok(mut file) = crate::config::load_accounts(&path) {
+            if file.set_default(&name).is_ok() {
+                let _ = crate::config::save_accounts(&path, &file);
+            }
+        }
+    }
+    app.acc_name = name;
+    app.status = format!("account → {}", app.acc_name);
+}
+
+fn open_selected_attachment(app: &mut App) -> Result<(), Error> {
+    let Some(m) = current_mail(app) else {
         return Ok(());
     };
+    let files = app.store.list_attachments(&m.uid)?;
+    let idx = match &app.screen {
+        Screen::Reader { attach_sel, .. } => *attach_sel,
+        _ => 0,
+    };
+    let Some(path) = files.get(idx) else {
+        app.status = if m.attachments.is_empty() {
+            "no attachments".into()
+        } else {
+            "attachments not on disk — sync --force".into()
+        };
+        return Ok(());
+    };
+    open_path(path)?;
+    app.status = format!("opened {}", path.file_name().unwrap_or_default().to_string_lossy());
+    Ok(())
+}
+
+fn open_selected(app: &mut App) -> Result<(), Error> {
+    let Some((box_name, m)) = visible(app).get(app.sel).cloned() else {
+        return Ok(());
+    };
+    app.box_name = box_name;
     if app.box_name == MailBox::Unread {
         if let Some(path) = &m.path {
             if let Ok((acc, password)) = load_default_account() {
@@ -348,12 +476,15 @@ fn open_selected(app: &mut App) -> Result<(), Error> {
             app.sel = i;
         }
     }
-    app.screen = Screen::Reader { scroll: 0 };
+    app.screen = Screen::Reader {
+        scroll: 0,
+        attach_sel: 0,
+    };
     Ok(())
 }
 
 fn start_reply(app: &mut App) {
-    let Some(m) = app.mails.get(app.sel).cloned() else {
+    let Some(m) = current_mail(app) else {
         return;
     };
     let to = if let (Some(s), Some(e)) = (m.from.find('<'), m.from.find('>')) {
@@ -381,7 +512,7 @@ fn start_reply(app: &mut App) {
 }
 
 fn mark_selected(app: &mut App, dest: MailBox) -> Result<(), Error> {
-    let Some(m) = app.mails.get(app.sel).cloned() else {
+    let Some((_, m)) = visible(app).get(app.sel).cloned() else {
         return Ok(());
     };
     let Some(path) = m.path.clone() else {
@@ -416,7 +547,12 @@ fn switch_box(app: &mut App, b: MailBox) {
 }
 
 fn sync_now(app: &mut App) {
-    match load_default_account() {
+    let loaded = if app.acc_name == "goblin" {
+        load_default_account()
+    } else {
+        load_named_account(&app.acc_name).or_else(|_| load_default_account())
+    };
+    match loaded {
         Ok((acc, password)) => match imap::sync(
             &acc,
             &password,
@@ -446,8 +582,15 @@ fn sync_now(app: &mut App) {
 impl App {
     fn reload(&mut self) {
         self.mails = self.store.load_mails(self.box_name).unwrap_or_default();
-        if self.sel >= self.mails.len() {
-            self.sel = self.mails.len().saturating_sub(1);
+        let n = if self.query.trim().is_empty() {
+            self.mails.len()
+        } else {
+            crate::search::search_store(&self.store, &self.query)
+                .map(|v| v.len())
+                .unwrap_or(0)
+        };
+        if self.sel >= n {
+            self.sel = n.saturating_sub(1);
         }
     }
 }
@@ -488,7 +631,7 @@ fn render(app: &App) -> String {
     let th = art::term_height();
     match &app.screen {
         Screen::List => render_list(app, tw, th),
-        Screen::Reader { scroll } => render_reader(app, tw, th, *scroll),
+        Screen::Reader { scroll, attach_sel } => render_reader(app, tw, th, *scroll, *attach_sel),
         Screen::Compose {
             draft,
             confirm_quit,
@@ -502,15 +645,22 @@ fn render_list(app: &App, tw: usize, th: usize) -> String {
         .load_mails(MailBox::Unread)
         .map(|m| m.len())
         .unwrap_or(0);
+    let searching = if app.searching || !app.query.is_empty() {
+        format!("search: {}{}", app.query, if app.searching { "█" } else { "" })
+    } else {
+        String::new()
+    };
     let sub = format!(
-        "{} · box: {} · unread: {unread_n} · last sync: {} · {}",
+        "{} · box: {} · unread: {unread_n} · last sync: {} · {}{sep}{searching}",
         app.acc_name,
         app.box_name.as_str(),
         last_sync(),
-        app.status
+        app.status,
+        sep = if searching.is_empty() { "" } else { " · " },
+        searching = searching
     );
     let runes = art::box_frame(
-        &["j/k move · enter open · s sync · m read · t trash · c compose · r reply · 1/2/3 box · q quit".into()],
+        &["j/k move · / search · [] account · enter open · s sync · m read · t trash · c compose · r reply · 1/2/3 box · q quit".into()],
         "Runes",
         "",
         tw,
@@ -523,21 +673,36 @@ fn render_list(app: &App, tw: usize, th: usize) -> String {
     if app.sel >= avail {
         start = app.sel + 1 - avail;
     }
+    let vis = visible(app);
     let mut rows: Vec<String> = Vec::new();
-    if app.mails.is_empty() {
+    if vis.is_empty() {
         rows.push(art::paint(
-            "  (no messages in this box — press s to sync) ",
+            if app.query.is_empty() {
+                "  (no messages in this box — press s to sync) "
+            } else {
+                "  (no matches) "
+            },
             &[art::MUTED],
         ));
     } else {
-        for (i, m) in app.mails.iter().enumerate().skip(start).take(avail) {
-            let frm = trunc(&from_short(&m.from), 18);
-            let rest = tw.saturating_sub(36);
+        for (i, (b, m)) in vis.iter().enumerate().skip(start).take(avail) {
+            let frm = trunc(&from_short(&m.from), 16);
+            let box_tag = if app.query.is_empty() {
+                String::new()
+            } else {
+                format!("{:<6} ", b.as_str())
+            };
+            let rest = tw.saturating_sub(38 + box_tag.len());
+            let att = if m.attachments.is_empty() {
+                ""
+            } else {
+                " ✎"
+            };
             let line = format!(
-                "  [{:>2}] {:<18} │ {}  {}",
+                "  [{:>2}] {box_tag}{:<16} │ {}{att}  {}",
                 i + 1,
                 frm,
-                trunc(&m.subject, rest.saturating_sub(18)),
+                trunc(&m.subject, rest.saturating_sub(16)),
                 trunc(&m.date, 16)
             );
             if i == app.sel {
@@ -554,19 +719,32 @@ fn render_list(app: &App, tw: usize, th: usize) -> String {
     format!("{head}\n{runes}")
 }
 
-fn render_reader(app: &App, tw: usize, th: usize, scroll: usize) -> String {
-    let Some(m) = app.mails.get(app.sel) else {
+fn render_reader(app: &App, tw: usize, th: usize, scroll: usize, attach_sel: usize) -> String {
+    let Some(m) = current_mail(app) else {
         return render_list(app, tw, th);
     };
+    let att = if m.attachments.is_empty() {
+        String::new()
+    } else {
+        let mut parts = Vec::new();
+        for (i, name) in m.attachments.iter().enumerate() {
+            if i == attach_sel {
+                parts.push(format!("[{name}]"));
+            } else {
+                parts.push(name.clone());
+            }
+        }
+        format!(" · attach: {}", parts.join(" "))
+    };
     let sub = format!(
-        "{} · box {} · {} · {}",
+        "{} · box {} · {} · {}{att}",
         app.acc_name,
         app.box_name.as_str(),
         m.uid,
         m.name()
     );
     let runes = art::box_frame(
-        &["j/k scroll · t trash · m read · r reply · q back".into()],
+        &["j/k scroll · a open attach · n next attach · t trash · m read · r reply · q back".into()],
         "Runes",
         "",
         tw,

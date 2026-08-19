@@ -7,7 +7,7 @@ use crate::notify;
 use crate::paths;
 use crate::smtp;
 use crate::store::{MailBox, MailMeta, Store};
-use crate::{secrets, AccountCmd, Cmd};
+use crate::{secrets, AccountCmd, AttachCmd, Cmd};
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -16,6 +16,7 @@ pub fn dispatch(cmd: Cmd) -> Result<u8, Error> {
         Cmd::Account { action } => match action {
             AccountCmd::Add { preset } => cmd_account_add(preset.as_deref()),
             AccountCmd::Show => cmd_account_show(),
+            AccountCmd::Use { name } => cmd_account_use(&name),
         },
         Cmd::ImportAerc { file } => cmd_import_aerc(file),
         Cmd::Sync {
@@ -25,7 +26,8 @@ pub fn dispatch(cmd: Cmd) -> Result<u8, Error> {
             force,
             folder,
             limit,
-        } => cmd_sync(quiet, no_notify, all, force, folder, limit),
+            account,
+        } => cmd_sync(quiet, no_notify, all, force, folder, limit, account),
         Cmd::Idle => cmd_idle(),
         Cmd::List { box_name, plain } => cmd_list(&box_name, plain),
         Cmd::Show { file, plain } => cmd_show(&file, plain),
@@ -43,10 +45,12 @@ pub fn dispatch(cmd: Cmd) -> Result<u8, Error> {
             body_file,
         } => cmd_send(&to, &subject, cc.as_deref(), body_file.as_deref()),
         Cmd::Sound { set } => notify::cmd_sound(set.as_deref()),
+        Cmd::Search { query, plain } => cmd_search(&query.join(" "), plain),
+        Cmd::Attach { action } => cmd_attach(action),
     }
 }
 
-pub fn load_default_account() -> Result<(Account, String), Error> {
+pub fn load_accounts_file() -> Result<config::AccountFile, Error> {
     let path = paths::accounts_file();
     if !path.exists() {
         return Err(Error::Usage(format!(
@@ -54,8 +58,19 @@ pub fn load_default_account() -> Result<(Account, String), Error> {
             path.display()
         )));
     }
-    let file = config::load_accounts(&path)?;
+    config::load_accounts(&path)
+}
+
+pub fn load_default_account() -> Result<(Account, String), Error> {
+    let file = load_accounts_file()?;
     let acc = file.default_account()?.clone();
+    let password = secrets::load_password(&secret_id(&acc))?;
+    Ok((acc, password))
+}
+
+pub fn load_named_account(name: &str) -> Result<(Account, String), Error> {
+    let file = load_accounts_file()?;
+    let acc = file.account(name)?.clone();
     let password = secrets::load_password(&secret_id(&acc))?;
     Ok((acc, password))
 }
@@ -77,18 +92,23 @@ fn cmd_account_show() -> Result<u8, Error> {
         )));
     }
     let file = config::load_accounts(&path)?;
-    let acc = file.default_account()?;
-    println!("name    {}", acc.name);
-    println!("from    {}", acc.from);
-    println!(
-        "imap    {}@{}:{}",
-        acc.imap.user, acc.imap.host, acc.imap.port
-    );
-    println!(
-        "smtp    {}@{}:{}",
-        acc.smtp.user, acc.smtp.host, acc.smtp.port
-    );
+    for acc in &file.accounts {
+        let mark = if acc.name == file.default { "*" } else { " " };
+        println!(
+            "{mark} {:<12}  {}  imap {}@{}:{}",
+            acc.name, acc.from, acc.imap.user, acc.imap.host, acc.imap.port
+        );
+    }
     println!("file    {}", path.display());
+    Ok(0)
+}
+
+fn cmd_account_use(name: &str) -> Result<u8, Error> {
+    let path = writable_accounts_path();
+    let mut file = config::load_accounts(&path)?;
+    file.set_default(name)?;
+    config::save_accounts(&path, &file)?;
+    println!("default account → {name}");
     Ok(0)
 }
 
@@ -153,14 +173,25 @@ fn cmd_account_add(preset: Option<&str>) -> Result<u8, Error> {
 }
 
 fn save_account(acc: Account, password: &str) -> Result<u8, Error> {
-    let file = AccountFile {
-        default: acc.name.clone(),
-        accounts: vec![acc.clone()],
-    };
     let path = writable_accounts_path();
+    let mut file = if path.exists() {
+        config::load_accounts(&path).unwrap_or(AccountFile {
+            default: acc.name.clone(),
+            accounts: Vec::new(),
+        })
+    } else {
+        AccountFile {
+            default: acc.name.clone(),
+            accounts: Vec::new(),
+        }
+    };
+    file.upsert(acc.clone());
+    if file.default.is_empty() {
+        file.default = acc.name.clone();
+    }
     config::save_accounts(&path, &file)?;
     secrets::store_password(&secret_id(&acc), password)?;
-    println!("saved {}", path.display());
+    println!("saved {} ({})", acc.name, path.display());
     Ok(0)
 }
 
@@ -206,8 +237,12 @@ fn cmd_sync(
     force: bool,
     folder: Option<String>,
     limit: usize,
+    account: Option<String>,
 ) -> Result<u8, Error> {
-    let (acc, password) = load_default_account()?;
+    let (acc, password) = match account {
+        Some(name) => load_named_account(&name)?,
+        None => load_default_account()?,
+    };
     if !quiet {
         eprintln!(
             "syncing {} from {} @ {} …",
@@ -284,7 +319,7 @@ fn cmd_idle() -> Result<u8, Error> {
         match imap::idle_once(&acc, &password) {
             Ok(()) => {
                 backoff = 5;
-                let _ = cmd_sync(false, false, false, false, None, 30);
+                let _ = cmd_sync(false, false, false, false, None, 30, None);
             }
             Err(e) => {
                 eprintln!("idle: {e} — reconnecting in {backoff}s");
@@ -455,6 +490,7 @@ fn cmd_send(to: &str, subject: &str, cc: Option<&str>, body_file: Option<&Path>)
         date: chrono::Utc::now().to_rfc2822(),
         subject: subject.into(),
         message_id: String::new(),
+        attachments: Vec::new(),
         path: None,
         body: String::new(),
     };
@@ -483,6 +519,126 @@ fn read_body(path: Option<&Path>) -> Result<String, Error> {
         }
         Some(p) => Ok(std::fs::read_to_string(p)?),
     }
+}
+
+fn cmd_search(query: &str, plain: bool) -> Result<u8, Error> {
+    if query.trim().is_empty() {
+        return Err(Error::Usage("goblin search <query>".into()));
+    }
+    let store = store();
+    let hits = crate::search::search_store(&store, query)?;
+    if hits.is_empty() {
+        println!("(no matches for {query:?})");
+        return Ok(0);
+    }
+    if plain {
+        for (b, m) in &hits {
+            println!(
+                "{}\t{}\tuid={}\tfrom={}\tsubject={}",
+                b.as_str(),
+                m.name(),
+                m.uid,
+                trunc(&m.from, 40),
+                trunc(&m.subject, 50)
+            );
+        }
+        return Ok(0);
+    }
+    println!("Goblin · {} match(es) for {query:?}", hits.len());
+    for (i, (b, m)) in hits.iter().enumerate() {
+        println!(
+            "[{:>2}] {:<6}  {:<18} │ {}",
+            i + 1,
+            b.as_str(),
+            trunc(&from_short(&m.from), 18),
+            m.subject
+        );
+    }
+    Ok(0)
+}
+
+fn cmd_attach(action: AttachCmd) -> Result<u8, Error> {
+    let store = store();
+    match action {
+        AttachCmd::List { mail } => {
+            let m = store.parse_path(&resolve_mail(&store, &mail)?)?;
+            let files = store.list_attachments(&m.uid)?;
+            if files.is_empty() && m.attachments.is_empty() {
+                println!("(no attachments on {})", m.name());
+                return Ok(0);
+            }
+            if files.is_empty() {
+                for (i, name) in m.attachments.iter().enumerate() {
+                    println!("[{:>2}] {name}  (not on disk — re-sync with --force)", i + 1);
+                }
+                return Ok(0);
+            }
+            for (i, p) in files.iter().enumerate() {
+                let sz = fs_size(p);
+                println!(
+                    "[{:>2}] {}  ({sz} bytes)",
+                    i + 1,
+                    p.file_name().unwrap_or_default().to_string_lossy()
+                );
+            }
+            Ok(0)
+        }
+        AttachCmd::Save { mail, index, dest } => {
+            let m = store.parse_path(&resolve_mail(&store, &mail)?)?;
+            let src = pick_attachment(&store, &m.uid, index)?;
+            let dest = match dest {
+                Some(d) if d.is_dir() => d.join(src.file_name().unwrap()),
+                Some(d) => d,
+                None => PathBuf::from(src.file_name().unwrap()),
+            };
+            std::fs::copy(&src, &dest)?;
+            println!("saved {}", dest.display());
+            Ok(0)
+        }
+        AttachCmd::Open { mail, index } => {
+            let m = store.parse_path(&resolve_mail(&store, &mail)?)?;
+            let src = pick_attachment(&store, &m.uid, index)?;
+            open_path(&src)?;
+            println!("opened {}", src.display());
+            Ok(0)
+        }
+    }
+}
+
+fn pick_attachment(store: &Store, uid: &str, index: usize) -> Result<PathBuf, Error> {
+    let files = store.list_attachments(uid)?;
+    if index == 0 || index > files.len() {
+        return Err(Error::Usage(format!(
+            "attachment {index} out of range (1-{})",
+            files.len()
+        )));
+    }
+    Ok(files[index - 1].clone())
+}
+
+fn fs_size(p: &Path) -> u64 {
+    std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+}
+
+pub fn open_path(path: &Path) -> Result<(), Error> {
+    let mut cmd = if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg(path);
+        c
+    } else if cfg!(target_os = "windows") {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", "", &path.to_string_lossy()]);
+        c
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(path);
+        c
+    };
+    cmd.stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| Error::Usage(format!("open {}: {e}", path.display())))?;
+    Ok(())
 }
 
 pub fn resolve_mail(store: &Store, spec: &str) -> Result<PathBuf, Error> {

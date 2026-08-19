@@ -4,7 +4,7 @@ use crate::config::Account;
 use crate::error::Error;
 use crate::store::{MailBox, MailMeta, Store};
 use crate::tls::{self, TlsMode};
-use mail_parser::MessageParser;
+use mail_parser::{MessageParser, MimeHeaders};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -117,7 +117,12 @@ async fn sync_async(
             continue;
         }
         let raw = c.uid_fetch_rfc822(&key).await?;
-        let (meta, body) = parse_message(&key, account, &folder, &raw);
+        let (mut meta, body) = parse_message(&key, account, &folder, &raw);
+        let atts = extract_attachments(&raw);
+        meta.attachments = atts.iter().map(|(n, _)| n.clone()).collect();
+        for (name, bytes) in &atts {
+            let _ = store.write_attachment(&key, name, bytes);
+        }
         store.write_mail(MailBox::Unread, &meta, &body)?;
         result.written += 1;
     }
@@ -167,10 +172,30 @@ fn parse_message(uid: &str, account: &Account, folder: &str, raw: &[u8]) -> (Mai
         date,
         subject,
         message_id,
+        attachments: Vec::new(),
         path: None,
         body: String::new(),
     };
     (meta, body)
+}
+
+pub fn extract_attachments(raw: &[u8]) -> Vec<(String, Vec<u8>)> {
+    let Some(msg) = MessageParser::default().parse(raw) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (i, part) in msg.attachments().enumerate() {
+        let name = part
+            .attachment_name()
+            .map(str::to_string)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("part-{i}"));
+        let bytes = part.contents().to_vec();
+        if !bytes.is_empty() {
+            out.push((name, bytes));
+        }
+    }
+    out
 }
 
 fn format_addr(name: Option<&str>, addr: Option<&str>) -> String {
@@ -526,5 +551,14 @@ mod tests {
     #[test]
     fn quote_escapes() {
         assert_eq!(imap_quote(r#"a"b\"#), r#""a\"b\\""#);
+    }
+
+    #[test]
+    fn extract_pdf_attachment_from_multipart() {
+        let raw = b"From: a@b\r\nTo: c@d\r\nSubject: files\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=xx\r\n\r\n--xx\r\nContent-Type: text/plain\r\n\r\nhello\r\n--xx\r\nContent-Type: application/pdf; name=\"doc.pdf\"\r\nContent-Disposition: attachment; filename=\"doc.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nUERG\r\n--xx--\r\n";
+        let atts = extract_attachments(raw);
+        assert_eq!(atts.len(), 1, "{atts:?}");
+        assert_eq!(atts[0].0, "doc.pdf");
+        assert_eq!(atts[0].1, b"PDF");
     }
 }

@@ -8,6 +8,7 @@ mod imap;
 mod import_aerc;
 mod notify;
 mod paths;
+mod search;
 mod secrets;
 mod smtp;
 mod store;
@@ -57,6 +58,8 @@ pub enum Cmd {
         folder: Option<String>,
         #[arg(long, default_value_t = 30)]
         limit: usize,
+        #[arg(long)]
+        account: Option<String>,
     },
     /// IMAP IDLE watcher — instant new-mail push
     Idle,
@@ -105,6 +108,17 @@ pub enum Cmd {
         #[arg(long)]
         set: Option<PathBuf>,
     },
+    /// Search from/subject/body across unread, read, and trash
+    Search {
+        query: Vec<String>,
+        #[arg(long)]
+        plain: bool,
+    },
+    /// List, save, or open attachments on a local message
+    Attach {
+        #[command(subcommand)]
+        action: AttachCmd,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -116,6 +130,22 @@ pub enum AccountCmd {
     },
     /// Print account hosts and user (never the password)
     Show,
+    /// Make this account the default
+    Use { name: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AttachCmd {
+    /// List attachments on a message (file, name, or unread #)
+    List { mail: String },
+    /// Save attachment N (1-based) to DEST or the current directory
+    Save {
+        mail: String,
+        index: usize,
+        dest: Option<PathBuf>,
+    },
+    /// Open attachment N with the system opener
+    Open { mail: String, index: usize },
 }
 
 fn main() -> ExitCode {
@@ -158,6 +188,8 @@ mod tests {
             "move",
             "send",
             "sound",
+            "search",
+            "attach",
         ] {
             assert!(help.contains(needle), "missing {needle} in:\n{help}");
         }

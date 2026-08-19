@@ -14,9 +14,15 @@ Rust. Own repo, same install contract as Bulwark. Cross-OS. The same tree can gr
 - Linux paths stay `~/.config/goblin/` and `~/.cache/goblin/mail/{unread,read,trash}/`.
 - No other mail programs. `goblin import-aerc` is a one-shot and never writes the password into JSON.
 
-## Out of v1
+## v1.1 (this phase)
 
-Search, attachments, multi-account switcher, HTML compose, Bcc, drafts box, Sent IMAP APPEND, office mail server, replacing Purelymail, Windows/macOS service wrappers.
+- Search across unread/read/trash (`goblin search`, TUI `/`).
+- Attachments extracted on sync to `~/.cache/goblin/attach/{uid}/`; `goblin attach list|save|open`; TUI `a` / `n`.
+- Multiple accounts: `account add` upserts; `account show` lists; `account use NAME`; TUI `[` `]`; `sync --account NAME`.
+
+## Still later
+
+HTML compose, Bcc, drafts box, Sent IMAP APPEND, office mail server, replacing Purelymail, Windows/macOS service wrappers.
 
 ## Later
 

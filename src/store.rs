@@ -50,6 +50,7 @@ pub struct MailMeta {
     pub date: String,
     pub subject: String,
     pub message_id: String,
+    pub attachments: Vec<String>,
     pub path: Option<PathBuf>,
     pub body: String,
 }
@@ -90,6 +91,36 @@ impl Store {
 
     pub fn box_dir(&self, box_name: MailBox) -> PathBuf {
         self.root.join(box_name.as_str())
+    }
+
+    pub fn attach_dir(&self, uid: &str) -> PathBuf {
+        let parent = self.root.parent().unwrap_or(&self.root);
+        parent.join("attach").join(safe_attach_uid(uid))
+    }
+
+    pub fn write_attachment(&self, uid: &str, name: &str, bytes: &[u8]) -> Result<PathBuf, Error> {
+        let dir = self.attach_dir(uid);
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)?;
+        let path = dir.join(safe_attach_name(name));
+        atomic_write_bytes_0600(&path, bytes)?;
+        Ok(path)
+    }
+
+    pub fn list_attachments(&self, uid: &str) -> Result<Vec<PathBuf>, Error> {
+        let dir = self.attach_dir(uid);
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut out: Vec<PathBuf> = fs::read_dir(&dir)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        out.sort();
+        Ok(out)
     }
 
     pub fn write_mail(
@@ -184,6 +215,13 @@ pub fn parse_mail_file(path: &Path) -> Result<MailMeta, Error> {
                 "date" => meta.date = v,
                 "subject" => meta.subject = v,
                 "message-id" => meta.message_id = v,
+                "attachments" => {
+                    meta.attachments = v
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
                 _ => {}
             }
         }
@@ -198,7 +236,7 @@ fn format_mail(meta: &MailMeta, body: &str) -> String {
         body
     };
     format!(
-        "uid: {}\naccount: {}\nfolder: {}\nfrom: {}\nto: {}\ndate: {}\nsubject: {}\nmessage-id: {}\n---\n{}\n",
+        "uid: {}\naccount: {}\nfolder: {}\nfrom: {}\nto: {}\ndate: {}\nsubject: {}\nmessage-id: {}\nattachments: {}\n---\n{}\n",
         meta.uid,
         meta.account,
         if meta.folder.is_empty() {
@@ -211,8 +249,35 @@ fn format_mail(meta: &MailMeta, body: &str) -> String {
         meta.date,
         meta.subject,
         meta.message_id,
+        meta.attachments.join(", "),
         body
     )
+}
+
+fn safe_attach_uid(uid: &str) -> String {
+    let s: String = uid
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        .collect();
+    if s.is_empty() {
+        "unknown".into()
+    } else {
+        s
+    }
+}
+
+fn safe_attach_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let s: String = base
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ' '))
+        .collect();
+    let s = s.trim().replace(' ', "_");
+    if s.is_empty() {
+        "attachment.bin".into()
+    } else {
+        s
+    }
 }
 
 fn safe_filename(uid: &str, subject: &str) -> String {
@@ -230,12 +295,16 @@ fn safe_filename(uid: &str, subject: &str) -> String {
 }
 
 fn atomic_write_0600(path: &Path, text: &str) -> Result<(), Error> {
-    let tmp = path.with_extension("txt.tmp");
+    atomic_write_bytes_0600(path, text.as_bytes())
+}
+
+fn atomic_write_bytes_0600(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    let tmp = path.with_extension("part");
     {
         let mut opts = fs::OpenOptions::new();
         opts.write(true).create(true).truncate(true).mode(0o600);
         let mut f = opts.open(&tmp)?;
-        f.write_all(text.as_bytes())?;
+        f.write_all(bytes)?;
     }
     fs::rename(&tmp, path)?;
     let mut perms = fs::metadata(path)?.permissions();
@@ -259,6 +328,7 @@ mod tests {
             date: "Mon, 1 Jan 2026 00:00:00 +0000".into(),
             subject: "Hello, goblin!".into(),
             message_id: "<x@y>".into(),
+            attachments: Vec::new(),
             path: None,
             body: String::new(),
         }
@@ -298,6 +368,28 @@ mod tests {
         let uids = store.known_uids().unwrap();
         assert_eq!(uids.len(), 3);
         assert!(uids.contains("1") && uids.contains("2") && uids.contains("3"));
+    }
+
+    #[test]
+    fn attachments_roundtrip_0600_and_header() {
+        let dir = tempdir().unwrap();
+        let store = Store::new(dir.path().to_path_buf());
+        let mut m = sample();
+        let saved = store
+            .write_attachment(&m.uid, "doc.pdf", b"%PDF-1.4")
+            .unwrap();
+        assert!(saved.ends_with("doc.pdf"));
+        let mode = fs::metadata(&saved).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        m.attachments = vec!["doc.pdf".into()];
+        let path = store.write_mail(MailBox::Unread, &m, "see file").unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("attachments: doc.pdf"), "{text}");
+        let parsed = parse_mail_file(&path).unwrap();
+        assert_eq!(parsed.attachments, vec!["doc.pdf".to_string()]);
+        let listed = store.list_attachments(&m.uid).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(fs::read(&listed[0]).unwrap(), b"%PDF-1.4");
     }
 
     #[test]

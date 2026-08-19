@@ -43,8 +43,13 @@ goblin show <file|#> [--plain]
 goblin bundle [--snippet N] [--limit N]
 goblin move read|trash <files…> [--all] [--local-only]
 goblin send --to ADDR --subject STR [--cc ADDR] [--body-file PATH|-]
+goblin search QUERY
+goblin attach list|save|open …
+goblin account use NAME
 goblin sound [--set FILE]
 ```
+
+TUI: `/` search · `[]` account · `a` open attachment · `n` next attachment.
 
 Linux paths: `~/.config/goblin/`, `~/.cache/goblin/mail/{unread,read,trash}/`.
 
