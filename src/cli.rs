@@ -17,6 +17,7 @@ pub fn dispatch(cmd: Cmd) -> Result<u8, Error> {
         Cmd::Who => cmd_account_show(),
         Cmd::Wake { name } => cmd_account_use(&name),
         Cmd::Dismiss { name } => cmd_account_remove(name.as_deref()),
+        Cmd::Mend { name } => crate::tui::run_mend(name),
         Cmd::Nest { action } => match action {
             AccountCmd::Add { preset } => cmd_account_add(preset.as_deref()),
             AccountCmd::Show => cmd_account_show(),
@@ -240,6 +241,53 @@ fn pick_nest() -> Result<String, Error> {
         "unknown nest",
         "pick 1-5, or: purelymail, google, disroot, outlook, yahoo",
     ))
+}
+
+/// Rewrite a goblin. `password` None = keep the old secret (move it if the email changed).
+pub fn replace_account(old_name: &str, acc: Account, password: Option<&str>) -> Result<u8, Error> {
+    let path = writable_accounts_path();
+    if !path.exists() {
+        return Err(Error::say("no goblins yet", "goblin summon"));
+    }
+    let mut file = config::load_accounts(&path)?;
+    let old = file
+        .accounts
+        .iter()
+        .find(|a| a.name == old_name)
+        .cloned()
+        .ok_or_else(|| Error::say(format!("no goblin named {old_name:?}"), "goblin who"))?;
+    let was_default = file.default == old_name;
+    let old_secret = secret_id(&old);
+    let _ = file.remove(old_name);
+    if file.accounts.iter().any(|a| a.name == acc.name) && acc.name != old_name {
+        return Err(Error::say(
+            format!("a goblin named {:?} already watches", acc.name),
+            "pick another name",
+        ));
+    }
+    file.upsert(acc.clone());
+    if was_default || file.default.is_empty() {
+        file.default = acc.name.clone();
+    }
+    config::save_accounts(&path, &file)?;
+    let new_secret = secret_id(&acc);
+    match password {
+        Some(p) if !p.is_empty() => {
+            secrets::store_password(&new_secret, p)?;
+            if new_secret != old_secret {
+                let _ = secrets::delete_password(&old_secret);
+            }
+        }
+        _ => {
+            if new_secret != old_secret {
+                if let Ok(old_pw) = secrets::load_password(&old_secret) {
+                    secrets::store_password(&new_secret, &old_pw)?;
+                    let _ = secrets::delete_password(&old_secret);
+                }
+            }
+        }
+    }
+    Ok(0)
 }
 
 pub fn save_account(acc: Account, password: &str, make_default: bool) -> Result<u8, Error> {

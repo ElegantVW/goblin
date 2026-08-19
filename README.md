@@ -32,7 +32,7 @@ goblin
 ```
 goblin                         open the horde
 goblin summon [--preset google]
-goblin who · wake NAME · dismiss [NAME]
+goblin who · wake NAME · mend [NAME] · dismiss [NAME]
 goblin steal                   new letters
 goblin peek [unread|read|trash]
 goblin read 1

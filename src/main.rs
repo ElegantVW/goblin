@@ -47,6 +47,10 @@ pub enum Cmd {
     Dismiss {
         name: Option<String>,
     },
+    /// Mend a goblin’s name, sky, or secret (opens the TUI)
+    Mend {
+        name: Option<String>,
+    },
     /// Old nest/account words
     #[command(name = "nest", alias = "account", hide = true)]
     Nest {
@@ -228,7 +232,7 @@ mod tests {
         let help = cmd.render_long_help().to_string();
         for needle in [
             "steal", "watch", "peek", "read", "pile", "keep", "trash", "send", "squeak",
-            "hunt", "parcel", "summon", "who", "wake", "dismiss",
+            "hunt", "parcel", "summon", "who", "wake", "dismiss", "mend",
         ] {
             assert!(help.contains(needle), "missing {needle} in:\n{help}");
         }

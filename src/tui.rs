@@ -2,7 +2,7 @@
 
 use crate::cli::{
     self, load_accounts_file, load_default_account, load_named_account, open_path, remove_account,
-    save_account,
+    replace_account, save_account,
 };
 use crate::config;
 use crate::compose;
@@ -44,6 +44,7 @@ enum NestField {
 }
 
 struct NestForm {
+    editing: Option<String>,
     preset: Option<String>,
     name: String,
     display: String,
@@ -64,8 +65,14 @@ enum Screen {
     Compose { draft: Draft, confirm_quit: bool },
     NestPick { sel: usize },
     NestForm { form: NestForm },
-    HordePick { sel: usize },
+    HordePick { sel: usize, why: HordeWhy },
     HordeBanish { name: String },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HordeWhy {
+    Dismiss,
+    Mend,
 }
 
 struct App {
@@ -122,6 +129,67 @@ pub fn run() -> Result<u8, Error> {
         app.status = "summon a goblin — which sky do they watch?".into();
     }
     app.reload();
+    let result = event_loop(&mut app, fd);
+    art::tui_cleanup();
+    result
+}
+
+pub fn run_mend(name: Option<String>) -> Result<u8, Error> {
+    if !std::io::stdout().is_terminal() {
+        return Err(Error::say(
+            "mending needs a real terminal",
+            "run: goblin",
+        ));
+    }
+    std::env::set_var("PIXIE_UNICODE", "1");
+    let Some(fd) = art::tui_open_tty() else {
+        return Err(Error::say("mending needs a real terminal", "run: goblin"));
+    };
+    art::tui_begin(fd, "goblin");
+    let (acc_name, acc_names) = match load_accounts_file() {
+        Ok(f) => (
+            f.default.clone(),
+            f.accounts.into_iter().map(|a| a.name).collect(),
+        ),
+        Err(_) => ("goblin".into(), Vec::new()),
+    };
+    let store = Store::default_store();
+    let _ = store.ensure();
+    let mut app = App {
+        store,
+        box_name: MailBox::Unread,
+        sel: 0,
+        status: "mend a goblin".into(),
+        screen: Screen::List,
+        mails: Vec::new(),
+        acc_name,
+        acc_names,
+        query: String::new(),
+        searching: false,
+    };
+    app.reload();
+    if let Some(n) = name {
+        if let Some(form) = form_from_name(&n) {
+            app.screen = Screen::NestForm { form };
+        } else {
+            art::tui_cleanup();
+            return Err(Error::say(format!("no goblin named {n:?}"), "goblin who"));
+        }
+    } else if app.acc_names.len() == 1 {
+        if let Some(form) = form_from_name(&app.acc_names[0]) {
+            app.screen = Screen::NestForm { form };
+        }
+    } else if !app.acc_names.is_empty() {
+        let sel = app
+            .acc_names
+            .iter()
+            .position(|n| n == &app.acc_name)
+            .unwrap_or(0);
+        app.screen = Screen::HordePick {
+            sel,
+            why: HordeWhy::Mend,
+        };
+    }
     let result = event_loop(&mut app, fd);
     art::tui_cleanup();
     result
@@ -245,7 +313,29 @@ fn handle_list(app: &mut App, key: &str) -> Result<bool, Error> {
                     .iter()
                     .position(|n| n == &app.acc_name)
                     .unwrap_or(0);
-                app.screen = Screen::HordePick { sel };
+                app.screen = Screen::HordePick {
+                    sel,
+                    why: HordeWhy::Dismiss,
+                };
+            }
+        }
+        "E" => {
+            if app.acc_names.is_empty() {
+                app.status = "no goblin to mend".into();
+            } else if app.acc_names.len() == 1 {
+                if let Some(form) = form_from_name(&app.acc_names[0]) {
+                    app.screen = Screen::NestForm { form };
+                }
+            } else {
+                let sel = app
+                    .acc_names
+                    .iter()
+                    .position(|n| n == &app.acc_name)
+                    .unwrap_or(0);
+                app.screen = Screen::HordePick {
+                    sel,
+                    why: HordeWhy::Mend,
+                };
             }
         }
         _ => {}
@@ -255,13 +345,17 @@ fn handle_list(app: &mut App, key: &str) -> Result<bool, Error> {
 
 fn handle_horde_pick(app: &mut App, key: &str) -> Result<bool, Error> {
     let n = app.acc_names.len();
-    let Screen::HordePick { sel } = &mut app.screen else {
+    let Screen::HordePick { sel, why } = &mut app.screen else {
         return Ok(false);
     };
+    let why = *why;
     match key {
         "esc" | "q" => {
             app.screen = Screen::List;
-            app.status = "no one was sent away".into();
+            app.status = match why {
+                HordeWhy::Dismiss => "no one was sent away".into(),
+                HordeWhy::Mend => "no one was mended".into(),
+            };
         }
         "j" | "down" => {
             if *sel + 1 < n {
@@ -272,12 +366,63 @@ fn handle_horde_pick(app: &mut App, key: &str) -> Result<bool, Error> {
         "enter" | "o" => {
             let name = app.acc_names.get(*sel).cloned();
             if let Some(name) = name {
-                app.screen = Screen::HordeBanish { name };
+                match why {
+                    HordeWhy::Dismiss => app.screen = Screen::HordeBanish { name },
+                    HordeWhy::Mend => {
+                        if let Some(form) = form_from_name(&name) {
+                            app.screen = Screen::NestForm { form };
+                        }
+                    }
+                }
             }
         }
         _ => {}
     }
     Ok(false)
+}
+
+fn split_from(from: &str) -> (String, String) {
+    if let (Some(a), Some(b)) = (from.find('<'), from.rfind('>')) {
+        if b > a {
+            return (
+                from[..a].trim().trim_matches('"').to_string(),
+                from[a + 1..b].trim().to_string(),
+            );
+        }
+    }
+    (String::new(), from.trim().to_string())
+}
+
+fn preset_for(acc: &config::Account) -> Option<String> {
+    config::NEST_PRESETS
+        .iter()
+        .find(|p| p.imap_host == acc.imap.host && p.imap_port == acc.imap.port)
+        .map(|p| p.id.to_string())
+}
+
+fn form_from_name(name: &str) -> Option<NestForm> {
+    let file = load_accounts_file().ok()?;
+    let acc = file.account(name).ok()?.clone();
+    let (display, email) = split_from(&acc.from);
+    Some(NestForm {
+        editing: Some(acc.name.clone()),
+        preset: preset_for(&acc),
+        name: acc.name,
+        display,
+        email: if email.is_empty() {
+            acc.imap.user.clone()
+        } else {
+            email
+        },
+        password: String::new(),
+        in_host: acc.imap.host,
+        in_port: acc.imap.port.to_string(),
+        out_host: acc.smtp.host,
+        out_port: acc.smtp.port.to_string(),
+        field: NestField::Name,
+        confirm_quit: false,
+        status: String::new(),
+    })
 }
 
 fn handle_horde_banish(app: &mut App, key: &str) -> Result<bool, Error> {
@@ -356,6 +501,7 @@ fn handle_nest_pick(app: &mut App, key: &str) -> Result<bool, Error> {
             let preset = if id == "other" { None } else { Some(id) };
             app.screen = Screen::NestForm {
                 form: NestForm {
+                    editing: None,
                     preset,
                     name: "work".into(),
                     display: String::new(),
@@ -494,12 +640,13 @@ fn commit_nest(app: &mut App) -> Result<bool, Error> {
         }
         return Ok(false);
     }
-    if form.password.is_empty() {
+    if form.password.is_empty() && form.editing.is_none() {
         if let Screen::NestForm { form } = &mut app.screen {
             form.status = "need a password".into();
         }
         return Ok(false);
     }
+    let form_was_edit = form.editing.is_some();
     let name = if form.name.trim().is_empty() {
         "work".into()
     } else {
@@ -542,14 +689,27 @@ fn commit_nest(app: &mut App) -> Result<bool, Error> {
     crate::tls::imap_mode(acc.imap.port)?;
     crate::tls::smtp_mode(acc.smtp.port)?;
     let password = form.password.clone();
-    save_account(acc, &password, true)?;
+    if let Some(old) = form.editing.clone() {
+        let pw = if password.is_empty() {
+            None
+        } else {
+            Some(password.as_str())
+        };
+        replace_account(&old, acc, pw)?;
+    } else {
+        save_account(acc, &password, true)?;
+    }
     let names = load_accounts_file()
         .map(|f| f.accounts.into_iter().map(|a| a.name).collect())
         .unwrap_or_default();
     app.acc_names = names;
     app.acc_name = name.clone();
     app.screen = Screen::List;
-    app.status = format!("woke {name}");
+    app.status = if form_was_edit {
+        format!("mended {name}")
+    } else {
+        format!("woke {name}")
+    };
     app.reload();
     Ok(false)
 }
@@ -1001,7 +1161,7 @@ fn render(app: &App) -> String {
         } => render_compose(app, tw, th, draft, *confirm_quit),
         Screen::NestPick { sel } => render_nest_pick(app, tw, th, *sel),
         Screen::NestForm { form } => render_nest_form(app, tw, th, form),
-        Screen::HordePick { sel } => render_horde_pick(app, tw, *sel),
+        Screen::HordePick { sel, why } => render_horde_pick(app, tw, *sel, *why),
         Screen::HordeBanish { name } => render_horde_banish(tw, name),
     }
 }
@@ -1027,7 +1187,7 @@ fn render_list(app: &App, tw: usize, th: usize) -> String {
         searching = searching
     );
     let runes = art::box_frame(
-        &["j/k move · / hunt · [] wake · N summon · X dismiss · enter open · s steal · c compose · q quit".into()],
+        &["j/k · / hunt · [] wake · N summon · E mend · X dismiss · enter · s steal · c compose · q".into()],
         "Runes",
         "",
         tw,
@@ -1228,7 +1388,11 @@ fn render_nest_form(_app: &App, tw: usize, _th: usize, form: &NestForm) -> Strin
         .and_then(config::find_preset)
         .map(|p| p.wants_app_password)
         .unwrap_or(false);
-    let mut sub = format!("sky: {sky}");
+    let mut sub = if form.editing.is_some() {
+        format!("mend · sky: {sky} · empty password keeps the old secret")
+    } else {
+        format!("sky: {sky}")
+    };
     if app_pw {
         sub.push_str(" · app password if your mail house asks for one");
     }
@@ -1252,7 +1416,11 @@ fn render_nest_form(_app: &App, tw: usize, _th: usize, form: &NestForm) -> Strin
         row(
             form.field == NestField::Password,
             "password",
-            &mask_secret(&form.password),
+            &if form.editing.is_some() && form.password.is_empty() {
+                "(unchanged)".into()
+            } else {
+                mask_secret(&form.password)
+            },
         ),
     ];
     if form.preset.is_none() {
@@ -1287,7 +1455,7 @@ fn render_nest_form(_app: &App, tw: usize, _th: usize, form: &NestForm) -> Strin
     format!("{head}\n{runes}")
 }
 
-fn render_horde_pick(app: &App, tw: usize, sel: usize) -> String {
+fn render_horde_pick(app: &App, tw: usize, sel: usize, why: HordeWhy) -> String {
     let mut rows = Vec::new();
     for (i, name) in app.acc_names.iter().enumerate() {
         let mark = if i == sel { "✦" } else { " " };
@@ -1298,7 +1466,11 @@ fn render_horde_pick(app: &App, tw: usize, sel: usize) -> String {
             rows.push(art::paint(&line, &[art::SILVER]));
         }
     }
-    let head = art::box_frame(&rows, "Goblin", "which goblin returns to the dark?", tw);
+    let sub = match why {
+        HordeWhy::Dismiss => "which goblin returns to the dark?",
+        HordeWhy::Mend => "which goblin shall we mend?",
+    };
+    let head = art::box_frame(&rows, "Goblin", sub, tw);
     let runes = art::box_frame(
         &["↑↓/j/k choose · enter · esc never mind".into()],
         "Runes",
@@ -1332,6 +1504,17 @@ mod tests {
     use super::*;
 
     #[test]
+    #[test]
+    #[test]
+    fn split_from_reads_display_and_email() {
+        let (n, e) = split_from("Ada Lovelace <ada@x>");
+        assert_eq!(n, "Ada Lovelace");
+        assert_eq!(e, "ada@x");
+        let (n2, e2) = split_from("ada@x");
+        assert_eq!(n2, "");
+        assert_eq!(e2, "ada@x");
+    }
+
     #[test]
     fn banish_copy_is_fae_not_nest() {
         let lines = banish_lines("work");
