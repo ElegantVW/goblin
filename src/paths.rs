@@ -50,36 +50,37 @@ pub fn notify_dir() -> PathBuf {
     config_dir()
 }
 
+static GOBLIN_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Serialize `GOBLIN_HOME` mutation and restore it even if `f` panics.
+/// Always public: `tests/*.rs` compile the lib without `cfg(test)`.
+pub fn with_goblin_home<R>(home: Option<&std::path::Path>, f: impl FnOnce() -> R) -> R {
+    let guard = GOBLIN_HOME_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let prev = std::env::var_os("GOBLIN_HOME");
+    // SAFETY: serialized by GOBLIN_HOME_LOCK; restored before return or unwind.
+    unsafe {
+        match home {
+            Some(p) => std::env::set_var("GOBLIN_HOME", p),
+            None => std::env::remove_var("GOBLIN_HOME"),
+        }
+    }
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    unsafe {
+        match prev {
+            Some(v) => std::env::set_var("GOBLIN_HOME", v),
+            None => std::env::remove_var("GOBLIN_HOME"),
+        }
+    }
+    drop(guard);
+    match out {
+        Ok(v) => v,
+        Err(p) => std::panic::resume_unwind(p),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV: Mutex<()> = Mutex::new(());
-
-    fn with_goblin_home<R>(home: Option<&std::path::Path>, f: impl FnOnce() -> R) -> R {
-        let guard = ENV.lock().unwrap_or_else(|p| p.into_inner());
-        let prev = std::env::var_os("GOBLIN_HOME");
-        // SAFETY: serialized by ENV; restored before return or unwind.
-        unsafe {
-            match home {
-                Some(p) => std::env::set_var("GOBLIN_HOME", p),
-                None => std::env::remove_var("GOBLIN_HOME"),
-            }
-        }
-        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var("GOBLIN_HOME", v),
-                None => std::env::remove_var("GOBLIN_HOME"),
-            }
-        }
-        drop(guard);
-        match out {
-            Ok(v) => v,
-            Err(p) => std::panic::resume_unwind(p),
-        }
-    }
 
     #[test]
     fn linux_paths_use_goblin_leaf() {

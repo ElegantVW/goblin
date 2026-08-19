@@ -897,6 +897,90 @@ mod tests {
     use crate::config::purelymail_preset;
 
     #[test]
+    fn replace_account_rename_keeps_secret_when_password_none() {
+        let root = tempfile::tempdir().unwrap();
+        crate::paths::with_goblin_home(Some(root.path()), || {
+            let acc = purelymail_preset("work", "Ada <ada@x>", "ada@x");
+            save_account(acc.clone(), "hunter2", true).unwrap();
+            let renamed = purelymail_preset("home", "Ada <ada@x>", "ada@x");
+            replace_account("work", renamed.clone(), None).unwrap();
+            let file = config::load_accounts(&paths::accounts_file()).unwrap();
+            assert_eq!(file.default, "home");
+            assert!(file.account("work").is_err());
+            assert_eq!(
+                secrets::load_password(&secret_id(&renamed)).unwrap(),
+                "hunter2"
+            );
+        });
+    }
+
+    #[test]
+    fn replace_account_email_change_moves_secret() {
+        let root = tempfile::tempdir().unwrap();
+        crate::paths::with_goblin_home(Some(root.path()), || {
+            let acc = purelymail_preset("work", "Ada <ada@x>", "ada@x");
+            save_account(acc.clone(), "hunter2", true).unwrap();
+            let updated = purelymail_preset("work", "Ada <ada@y>", "ada@y");
+            replace_account("work", updated.clone(), None).unwrap();
+            assert!(secrets::load_password(&secret_id(&acc)).is_err());
+            assert_eq!(
+                secrets::load_password(&secret_id(&updated)).unwrap(),
+                "hunter2"
+            );
+        });
+    }
+
+    #[test]
+    fn replace_account_name_collision_errors() {
+        let root = tempfile::tempdir().unwrap();
+        crate::paths::with_goblin_home(Some(root.path()), || {
+            let work = purelymail_preset("work", "Ada <ada@x>", "ada@x");
+            let home = purelymail_preset("home", "Ada <ada@y>", "ada@y");
+            save_account(work, "hunter2", true).unwrap();
+            save_account(home, "hunter3", false).unwrap();
+            let collide = purelymail_preset("home", "Ada <ada@x>", "ada@x");
+            match replace_account("work", collide, None) {
+                Err(Error::Hint { msg, .. }) => {
+                    assert!(msg.contains("already watches"), "{msg}");
+                }
+                other => panic!("{other:?}"),
+            }
+            let file = config::load_accounts(&paths::accounts_file()).unwrap();
+            assert!(file.account("work").is_ok());
+            assert!(file.account("home").is_ok());
+        });
+    }
+
+    #[test]
+    fn replace_account_missing_goblin_errors() {
+        let root = tempfile::tempdir().unwrap();
+        crate::paths::with_goblin_home(Some(root.path()), || {
+            let acc = purelymail_preset("work", "Ada <ada@x>", "ada@x");
+            match replace_account("work", acc.clone(), None) {
+                Err(Error::Hint { msg, .. }) => assert!(msg.contains("no goblins yet"), "{msg}"),
+                other => panic!("{other:?}"),
+            }
+            save_account(acc, "hunter2", true).unwrap();
+            let ghost = purelymail_preset("ghost", "Ada <ada@x>", "ada@x");
+            match replace_account("ghost", ghost, None) {
+                Err(Error::Hint { msg, .. }) => assert!(msg.contains("no goblin named"), "{msg}"),
+                other => panic!("{other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn replace_account_new_password_overwrites_secret() {
+        let root = tempfile::tempdir().unwrap();
+        crate::paths::with_goblin_home(Some(root.path()), || {
+            let acc = purelymail_preset("work", "Ada <ada@x>", "ada@x");
+            save_account(acc.clone(), "hunter2", true).unwrap();
+            replace_account("work", acc.clone(), Some("s3cret")).unwrap();
+            assert_eq!(secrets::load_password(&secret_id(&acc)).unwrap(), "s3cret");
+        });
+    }
+
+    #[test]
     fn bundle_and_plain_contain_no_password() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path().to_path_buf());
