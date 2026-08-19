@@ -3,7 +3,6 @@
 use crate::error::Error;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,9 +122,8 @@ pub fn purelymail_preset(name: &str, from: &str, user: &str) -> Account {
 
 /// Fail closed if group/other have any permission bits.
 pub fn check_secret_mode(path: &Path) -> Result<(), Error> {
-    let meta = fs::metadata(path)?;
-    let mode = meta.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
+    if crate::fsutil::is_world_readable(path)? {
+        let mode = crate::fsutil::file_mode(path)?.unwrap_or(0);
         return Err(Error::Perms {
             path: path.to_path_buf(),
             mode,
@@ -187,32 +185,8 @@ pub fn load_accounts(path: &Path) -> Result<AccountFile, Error> {
 }
 
 pub fn save_accounts(path: &Path, file: &AccountFile) -> Result<(), Error> {
-    if let Some(parent) = path.parent() {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent)?;
-        #[cfg(unix)]
-        {
-            let mut perms = fs::metadata(parent)?.permissions();
-            perms.set_mode(0o700);
-            fs::set_permissions(parent, perms)?;
-        }
-    }
     let json = serde_json::to_string_pretty(file)?;
-    let tmp = path.with_extension("json.tmp");
-    {
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true).mode(0o600);
-        use std::io::Write;
-        let mut f = opts.open(&tmp)?;
-        f.write_all(json.as_bytes())?;
-        f.write_all(b"\n")?;
-    }
-    fs::rename(&tmp, path)?;
-    let mut perms = fs::metadata(path)?.permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(path, perms)?;
+    crate::fsutil::write_private(path, format!("{json}\n").as_bytes())?;
     Ok(())
 }
 
@@ -282,11 +256,21 @@ mod tests {
 
     fn write_mode(path: &Path, text: &str, mode: u32) {
         let mut opts = fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true).mode(mode);
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(mode);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = mode;
+        }
         let mut f = opts.open(path).unwrap();
         f.write_all(text.as_bytes()).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn refuses_group_or_other_readable() {
         let dir = tempdir().unwrap();
@@ -341,19 +325,11 @@ mod tests {
     #[test]
     fn upsert_keeps_existing_and_can_switch_default() {
         let mut file = sample();
-        file.upsert(purelymail_preset(
-            "home",
-            "Ada <ada@home>",
-            "ada@home",
-        ));
+        file.upsert(purelymail_preset("home", "Ada <ada@home>", "ada@home"));
         assert_eq!(file.accounts.len(), 2);
         file.set_default("home").unwrap();
         assert_eq!(file.default, "home");
-        file.upsert(purelymail_preset(
-            "work",
-            "Ada <ada@work>",
-            "ada@work",
-        ));
+        file.upsert(purelymail_preset("work", "Ada <ada@work>", "ada@work"));
         assert_eq!(file.accounts.len(), 2);
         assert_eq!(file.account("work").unwrap().from, "Ada <ada@work>");
     }
@@ -382,7 +358,10 @@ mod tests {
         save_accounts(&path, &sample()).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         assert!(!text.contains("password"));
-        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        assert!(text.ends_with('\n'), "{text:?}");
+        #[cfg(unix)]
+        {
+            assert_eq!(crate::fsutil::file_mode(&path).unwrap(), Some(0o600));
+        }
     }
 }
