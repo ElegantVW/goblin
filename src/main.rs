@@ -156,8 +156,14 @@ pub enum AccountCmd {
     },
     /// Print account hosts and user (never the password)
     Show,
-    /// Make this account the default
+    /// Make this nest the default
     Use { name: String },
+    /// Forget a nest (password too)
+    #[command(alias = "rm")]
+    Remove {
+        /// Nest name (default: the current one)
+        name: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

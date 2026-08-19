@@ -31,7 +31,7 @@ goblin
 
 ```
 goblin                         open the nest
-goblin nest add|show|use
+goblin nest add|show|use|remove
 goblin nest add --preset google
 goblin steal                   new letters
 goblin peek [unread|read|trash]

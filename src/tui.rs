@@ -1,7 +1,8 @@
 //! House TUI: stacked fae_termart boxes + Runes. No ratatui. No Python.
 
 use crate::cli::{
-    self, load_accounts_file, load_default_account, load_named_account, open_path, save_account,
+    self, load_accounts_file, load_default_account, load_named_account, open_path, remove_account,
+    save_account,
 };
 use crate::config;
 use crate::compose;
@@ -63,6 +64,7 @@ enum Screen {
     Compose { draft: Draft, confirm_quit: bool },
     NestPick { sel: usize },
     NestForm { form: NestForm },
+    NestDrop { name: String },
 }
 
 struct App {
@@ -143,6 +145,7 @@ fn handle_key(app: &mut App, key: &str) -> Result<bool, Error> {
         Screen::Compose { .. } => handle_compose(app, key),
         Screen::NestPick { .. } => handle_nest_pick(app, key),
         Screen::NestForm { .. } => handle_nest_form(app, key),
+        Screen::NestDrop { .. } => handle_nest_drop(app, key),
     }
 }
 
@@ -230,6 +233,57 @@ fn handle_list(app: &mut App, key: &str) -> Result<bool, Error> {
         "r" | "R" => start_reply(app),
         "N" => {
             app.screen = Screen::NestPick { sel: 0 };
+        }
+        "X" => {
+            if app.acc_names.is_empty() || app.acc_name == "goblin" {
+                app.status = "no nest to drop".into();
+            } else {
+                app.screen = Screen::NestDrop {
+                    name: app.acc_name.clone(),
+                };
+            }
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_nest_drop(app: &mut App, key: &str) -> Result<bool, Error> {
+    let Screen::NestDrop { name } = &app.screen else {
+        return Ok(false);
+    };
+    let name = name.clone();
+    match key {
+        "y" | "Y" => {
+            match remove_account(&name) {
+                Ok(gone) => {
+                    let file = load_accounts_file().ok();
+                    app.acc_names = file
+                        .as_ref()
+                        .map(|f| f.accounts.iter().map(|a| a.name.clone()).collect())
+                        .unwrap_or_default();
+                    app.acc_name = file
+                        .map(|f| f.default)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "goblin".into());
+                    if app.acc_names.is_empty() {
+                        app.screen = Screen::NestPick { sel: 0 };
+                        app.status = format!("dropped {gone} — pick a sky");
+                    } else {
+                        app.screen = Screen::List;
+                        app.status = format!("dropped nest {gone}");
+                    }
+                    app.reload();
+                }
+                Err(e) => {
+                    app.screen = Screen::List;
+                    app.status = format!("{e}");
+                }
+            }
+        }
+        "esc" | "n" | "N" | "q" => {
+            app.screen = Screen::List;
+            app.status = "kept the nest".into();
         }
         _ => {}
     }
@@ -681,7 +735,7 @@ fn current_mail(app: &App) -> Option<MailMeta> {
     match &app.screen {
         Screen::Reader { .. } | Screen::List => visible(app).get(app.sel).map(|(_, m)| m.clone()),
         Screen::Compose { draft, .. } => draft.reply_to.clone(),
-        Screen::NestPick { .. } | Screen::NestForm { .. } => None,
+        Screen::NestPick { .. } | Screen::NestForm { .. } | Screen::NestDrop { .. } => None,
     }
 }
 
@@ -914,6 +968,7 @@ fn render(app: &App) -> String {
         } => render_compose(app, tw, th, draft, *confirm_quit),
         Screen::NestPick { sel } => render_nest_pick(app, tw, th, *sel),
         Screen::NestForm { form } => render_nest_form(app, tw, th, form),
+        Screen::NestDrop { name } => render_nest_drop(tw, name),
     }
 }
 
@@ -938,7 +993,7 @@ fn render_list(app: &App, tw: usize, th: usize) -> String {
         searching = searching
     );
     let runes = art::box_frame(
-        &["j/k move · / hunt · [] nest · N nest add · enter open · s steal · c compose · r reply · 1/2/3 box · q quit".into()],
+        &["j/k move · / hunt · [] nest · N add · X drop · enter open · s steal · c compose · 1/2/3 box · q quit".into()],
         "Runes",
         "",
         tw,
@@ -1191,6 +1246,25 @@ fn render_nest_form(_app: &App, tw: usize, _th: usize, form: &NestForm) -> Strin
     let head = art::box_frame(&rows, "Goblin", &sub, tw);
     let runes = art::box_frame(
         &["tab field · type · ctrl-s save · esc abandon".into()],
+        "Runes",
+        "",
+        tw,
+    );
+    format!("{head}\n{runes}")
+}
+
+fn render_nest_drop(tw: usize, name: &str) -> String {
+    let head = art::box_frame(
+        &[
+            format!("drop nest {name}?"),
+            "this forgets the password too.".into(),
+        ],
+        "Goblin",
+        "cannot undo",
+        tw,
+    );
+    let runes = art::box_frame(
+        &["y drop · n keep".into()],
         "Runes",
         "",
         tw,

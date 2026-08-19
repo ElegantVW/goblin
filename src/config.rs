@@ -244,6 +244,23 @@ impl AccountFile {
         self.default = name.to_string();
         Ok(())
     }
+
+    pub fn remove(&mut self, name: &str) -> Result<Account, Error> {
+        let idx = self
+            .accounts
+            .iter()
+            .position(|a| a.name == name)
+            .ok_or_else(|| Error::say(format!("no nest named {name:?}"), "goblin nest show"))?;
+        let acc = self.accounts.remove(idx);
+        if self.default == name {
+            self.default = self
+                .accounts
+                .first()
+                .map(|a| a.name.clone())
+                .unwrap_or_default();
+        }
+        Ok(acc)
+    }
 }
 
 #[cfg(test)]
@@ -304,6 +321,21 @@ mod tests {
             Error::Config(s) => assert!(s.contains("password"), "{s}"),
             other => panic!("expected Config, got {other}"),
         }
+    }
+
+    #[test]
+    fn remove_drops_nest_and_repicks_default() {
+        let mut file = sample();
+        file.upsert(purelymail_preset("home", "Ada <ada@home>", "ada@home"));
+        file.set_default("work").unwrap();
+        let gone = file.remove("work").unwrap();
+        assert_eq!(gone.name, "work");
+        assert_eq!(file.accounts.len(), 1);
+        assert_eq!(file.default, "home");
+        file.remove("home").unwrap();
+        assert!(file.accounts.is_empty());
+        assert!(file.default.is_empty());
+        assert!(file.remove("ghost").is_err());
     }
 
     #[test]

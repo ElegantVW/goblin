@@ -17,6 +17,22 @@ pub fn store_password(id: &str, password: &str) -> Result<(), Error> {
     store_password_in_file(&paths::secrets_file(), id, password)
 }
 
+pub fn delete_password(id: &str) -> Result<(), Error> {
+    let _ = try_keyring_delete(id);
+    let path = paths::secrets_file();
+    if path.is_file() {
+        delete_password_from_file(&path, id)?;
+    }
+    Ok(())
+}
+
+fn try_keyring_delete(id: &str) -> Result<(), Error> {
+    let e = keyring::Entry::new(SERVICE, id)
+        .map_err(|e| Error::Secret(format!("keyring: {e}")))?;
+    e.delete_credential()
+        .map_err(|e| Error::Secret(format!("keyring: {e}")))
+}
+
 pub fn load_password(id: &str) -> Result<String, Error> {
     if let Ok(p) = try_keyring_get(id) {
         if !p.is_empty() {
@@ -62,6 +78,35 @@ pub fn store_password_in_file(path: &Path, id: &str, password: &str) -> Result<(
         let mut perms = fs::metadata(parent)?.permissions();
         perms.set_mode(0o700);
         let _ = fs::set_permissions(parent, perms);
+    }
+    let tmp = path.with_extension("secrets.tmp");
+    {
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true).mode(0o600);
+        let mut f = opts.open(&tmp)?;
+        for (k, v) in &rows {
+            writeln!(f, "{k}\t{v}")?;
+        }
+    }
+    fs::rename(&tmp, path)?;
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(0o600);
+    fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+pub fn delete_password_from_file(path: &Path, id: &str) -> Result<(), Error> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    check_secret_mode(path)?;
+    let rows: Vec<(String, String)> = read_pairs(path)?
+        .into_iter()
+        .filter(|(k, _)| k != id)
+        .collect();
+    if rows.is_empty() {
+        let _ = fs::remove_file(path);
+        return Ok(());
     }
     let tmp = path.with_extension("secrets.tmp");
     {
@@ -141,6 +186,20 @@ mod tests {
             Error::Perms { mode, .. } => assert_eq!(mode, 0o644),
             other => panic!("expected Perms, got {other}"),
         }
+    }
+
+    #[test]
+    #[test]
+    fn delete_removes_row() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("secrets");
+        store_password_in_file(&path, "ada@x", "one").unwrap();
+        store_password_in_file(&path, "bob@x", "two").unwrap();
+        delete_password_from_file(&path, "ada@x").unwrap();
+        assert!(load_password_from_file(&path, "ada@x").is_err());
+        assert_eq!(load_password_from_file(&path, "bob@x").unwrap(), "two");
+        delete_password_from_file(&path, "bob@x").unwrap();
+        assert!(!path.exists());
     }
 
     #[test]

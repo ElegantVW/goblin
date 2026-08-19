@@ -17,6 +17,7 @@ pub fn dispatch(cmd: Cmd) -> Result<u8, Error> {
             AccountCmd::Add { preset } => cmd_account_add(preset.as_deref()),
             AccountCmd::Show => cmd_account_show(),
             AccountCmd::Use { name } => cmd_account_use(&name),
+            AccountCmd::Remove { name } => cmd_account_remove(name.as_deref()),
         },
         Cmd::ImportAerc { file } => cmd_import_aerc(file),
         Cmd::Steal {
@@ -100,6 +101,37 @@ fn cmd_account_show() -> Result<u8, Error> {
         let mark = if acc.name == file.default { "*" } else { " " };
         println!("{mark} {:<12}  {}", acc.name, acc.from);
     }
+    Ok(0)
+}
+
+pub fn remove_account(name: &str) -> Result<String, Error> {
+    let path = writable_accounts_path();
+    if !path.exists() {
+        return Err(Error::say("no nest yet", "goblin nest add"));
+    }
+    let mut file = config::load_accounts(&path)?;
+    let acc = file.remove(name)?;
+    let secret = secret_id(&acc);
+    let _ = secrets::delete_password(&secret);
+    if file.accounts.is_empty() {
+        let _ = std::fs::remove_file(&path);
+    } else {
+        config::save_accounts(&path, &file)?;
+    }
+    Ok(acc.name)
+}
+
+fn cmd_account_remove(name: Option<&str>) -> Result<u8, Error> {
+    let file = load_accounts_file()?;
+    let name = match name {
+        Some(n) => n.to_string(),
+        None => file.default.clone(),
+    };
+    if name.is_empty() {
+        return Err(Error::say("no nest yet", "goblin nest add"));
+    }
+    let gone = remove_account(&name)?;
+    println!("dropped nest {gone}");
     Ok(0)
 }
 
