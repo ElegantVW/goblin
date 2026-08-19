@@ -8,7 +8,9 @@ fn project() -> directories::ProjectDirs {
 }
 
 fn home_root() -> Option<PathBuf> {
-    std::env::var_os("GOBLIN_HOME").map(PathBuf::from)
+    std::env::var_os("GOBLIN_HOME")
+        .filter(|v| !v.to_string_lossy().trim().is_empty())
+        .map(PathBuf::from)
 }
 
 pub fn config_dir() -> PathBuf {
@@ -82,6 +84,7 @@ pub fn with_goblin_home<R>(home: Option<&std::path::Path>, f: impl FnOnce() -> R
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn linux_paths_use_goblin_leaf() {
         with_goblin_home(None, || {
@@ -91,6 +94,17 @@ mod tests {
             assert!(cache.ends_with("goblin"), "{cache:?}");
             assert!(mail_root().ends_with("mail"));
         });
+    }
+
+    #[test]
+    fn empty_or_whitespace_goblin_home_is_unset() {
+        let unset = with_goblin_home(None, || (config_dir(), cache_dir()));
+        for raw in ["", "   ", "\t", "\n"] {
+            with_goblin_home(Some(std::path::Path::new(raw)), || {
+                assert_eq!(config_dir(), unset.0, "GOBLIN_HOME={raw:?}");
+                assert_eq!(cache_dir(), unset.1, "GOBLIN_HOME={raw:?}");
+            });
+        }
     }
 
     #[test]

@@ -346,7 +346,7 @@ fn cmd_import_aerc(file: Option<PathBuf>) -> Result<u8, Error> {
         password = read_password("password: ")?;
     }
     save_account(acc, &password, file_is_empty())?;
-    println!("imported nest");
+    println!("imported goblin");
     eprintln!("note: password stored in the keyring/secrets file, not in accounts.json");
     Ok(0)
 }

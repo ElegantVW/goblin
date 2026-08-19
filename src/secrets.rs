@@ -104,9 +104,12 @@ pub fn delete_password_from_file(path: &Path, id: &str) -> Result<(), Error> {
 
 pub fn load_password_from_file(path: &Path, id: &str) -> Result<String, Error> {
     if !path.is_file() {
-        return Err(Error::Secret(format!(
-            "no password for {id} (keyring empty and no secrets file)"
-        )));
+        let why = if cfg!(feature = "keyring") {
+            "keyring empty and no secrets file"
+        } else {
+            "no secrets file"
+        };
+        return Err(Error::Secret(format!("no password for {id} ({why})")));
     }
     check_secret_mode(path)?;
     for (k, v) in read_pairs(path)? {
@@ -149,6 +152,20 @@ fn read_pairs(path: &Path) -> Result<Vec<(String, String)>, Error> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn missing_file_error_omits_keyring_when_feature_off() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("secrets");
+        let err = load_password_from_file(&path, "ada@x").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no password for ada@x"), "{msg}");
+        assert!(msg.contains("no secrets file"), "{msg}");
+        #[cfg(feature = "keyring")]
+        assert!(msg.contains("keyring empty"), "{msg}");
+        #[cfg(not(feature = "keyring"))]
+        assert!(!msg.contains("keyring"), "{msg}");
+    }
 
     #[test]
     fn file_roundtrip_0600() {
