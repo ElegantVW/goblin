@@ -963,41 +963,44 @@ mod tests {
 
     #[test]
     fn bundle_and_plain_contain_no_password() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::new(dir.path().to_path_buf());
-        let acc = purelymail_preset("work", "Ada <ada@x>", "ada@x");
-        let meta = MailMeta {
-            uid: "1".into(),
-            account: acc.name.clone(),
-            from: "bob@x".into(),
-            subject: "hi".into(),
-            body: String::new(),
-            ..MailMeta::default()
-        };
-        store
-            .write_mail(
-                MailBox::Unread,
-                &meta,
-                "secret body s3cret-not-a-password-field",
-            )
-            .unwrap();
-        let json = serde_json::to_string(&acc).unwrap();
-        assert!(!json.contains("password"));
-        let mails = store.load_mails(MailBox::Unread).unwrap();
-        let mut plain = String::new();
-        for m in &mails {
-            plain.push_str(&format!(
-                "{}\tuid={}\tfrom={}\tsubject={}\n",
-                m.name(),
-                m.uid,
-                m.from,
-                m.subject
-            ));
-        }
-        assert!(!plain.contains("password"));
-        assert!(
-            !plain.contains(&secrets::load_password("ada@x").unwrap_or_default())
-                || secrets::load_password("ada@x").is_err()
-        );
+        let root = tempfile::tempdir().unwrap();
+        crate::paths::with_goblin_home(Some(root.path()), || {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::new(dir.path().to_path_buf());
+            let acc = purelymail_preset("work", "Ada <ada@x>", "ada@x");
+            save_account(acc.clone(), "hunter2-not-in-list", true).unwrap();
+            let meta = MailMeta {
+                uid: "1".into(),
+                account: acc.name.clone(),
+                from: "bob@x".into(),
+                subject: "hi".into(),
+                body: String::new(),
+                ..MailMeta::default()
+            };
+            store
+                .write_mail(
+                    MailBox::Unread,
+                    &meta,
+                    "secret body s3cret-not-a-password-field",
+                )
+                .unwrap();
+            let json = serde_json::to_string(&acc).unwrap();
+            assert!(!json.contains("password"));
+            let mails = store.load_mails(MailBox::Unread).unwrap();
+            let mut plain = String::new();
+            for m in &mails {
+                plain.push_str(&format!(
+                    "{}\tuid={}\tfrom={}\tsubject={}\n",
+                    m.name(),
+                    m.uid,
+                    m.from,
+                    m.subject
+                ));
+            }
+            assert!(!plain.contains("password"));
+            let pw = secrets::load_password(&secret_id(&acc)).unwrap();
+            assert_eq!(pw, "hunter2-not-in-list");
+            assert!(!plain.contains(&pw), "{plain}");
+        });
     }
 }
