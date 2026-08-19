@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # goblin — thin launcher (never a prebuilt ELF in git)
-# Discovery: GOBLIN_BIN → ~/.local/lib/faeos/goblin → sibling tree
+# Discovery: GOBLIN_BIN → ~/.local/bin → ~/.local/lib/faeos → sibling tree
 set -euo pipefail
 
 USER_HOME="${HOME}"
@@ -11,6 +11,7 @@ fi
 
 CANDIDATES=(
   "${GOBLIN_BIN:-}"
+  "$USER_HOME/.local/bin/goblin"
   "$USER_HOME/.local/lib/faeos/goblin"
   /usr/local/lib/faeos/goblin
   "$USER_HOME/goblin/target/release/goblin"
@@ -23,6 +24,8 @@ fi
 
 for c in "${CANDIDATES[@]}"; do
   [[ -n "$c" && -x "$c" ]] || continue
+  # Avoid re-execing this wrapper if it appears on PATH as ~/.local/bin/goblin
+  [[ "$c" -ef "$0" ]] && continue
   exec "$c" "$@"
 done
 
