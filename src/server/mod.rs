@@ -80,7 +80,8 @@ async fn serve(bind: String, smtp_in: u16, smtp_sub: u16, imap: u16) -> Result<u
         "goblind: listening imap {}",
         imap_l.local_addr().map_err(Error::Io)?
     );
-    let implicit_sub = smtp_sub == 465;
+    // 587 = STARTTLS; 465 and lab high ports = implicit TLS.
+    let implicit_sub = smtp_sub != 587;
     tokio::spawn(smtp::accept_loop(
         in_l,
         smtp::Kind::Inbound,

@@ -21,6 +21,10 @@ pub enum TlsMode {
     StartTls,
 }
 
+fn lab_extra_ca_set() -> bool {
+    matches!(std::env::var("GOBLIN_EXTRA_CA"), Ok(p) if !p.trim().is_empty())
+}
+
 pub fn smtp_mode(port: u16) -> Result<TlsMode, Error> {
     match port {
         465 => Ok(TlsMode::Implicit),
@@ -28,6 +32,8 @@ pub fn smtp_mode(port: u16) -> Result<TlsMode, Error> {
         25 => Err(Error::TlsPolicy(
             "smtp port 25 is refused; use 465 (implicit TLS) or 587 (STARTTLS)".into(),
         )),
+        // Lab: trust-extra-CA builds may use high ports with implicit TLS (still verified).
+        _ if lab_extra_ca_set() => Ok(TlsMode::Implicit),
         other => Err(Error::TlsPolicy(format!(
             "smtp port {other} is refused; use 465 (implicit TLS) or 587 (STARTTLS)"
         ))),
@@ -38,6 +44,7 @@ pub fn imap_mode(port: u16) -> Result<TlsMode, Error> {
     match port {
         993 => Ok(TlsMode::Implicit),
         143 => Ok(TlsMode::StartTls),
+        _ if lab_extra_ca_set() => Ok(TlsMode::Implicit),
         other => Err(Error::TlsPolicy(format!(
             "imap port {other} is refused; use 993 (implicit TLS) or 143 (STARTTLS)"
         ))),
@@ -133,25 +140,39 @@ mod tests {
 
     #[test]
     fn smtp_refuses_cleartext() {
-        match smtp_mode(25) {
-            Err(Error::TlsPolicy(s)) => assert!(s.contains("25"), "{s}"),
-            other => panic!("{other:?}"),
-        }
-        assert_eq!(smtp_mode(465).unwrap(), TlsMode::Implicit);
-        assert_eq!(smtp_mode(587).unwrap(), TlsMode::StartTls);
+        with_extra_ca_env(None, || {
+            match smtp_mode(25) {
+                Err(Error::TlsPolicy(s)) => assert!(s.contains("25"), "{s}"),
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(smtp_mode(465).unwrap(), TlsMode::Implicit);
+            assert_eq!(smtp_mode(587).unwrap(), TlsMode::StartTls);
+        });
     }
 
     #[test]
     fn imap_refuses_non_tls_ports() {
-        match imap_mode(143) {
-            Ok(TlsMode::StartTls) => {}
-            other => panic!("{other:?}"),
-        }
-        match imap_mode(80) {
-            Err(Error::TlsPolicy(_)) => {}
-            other => panic!("{other:?}"),
-        }
-        assert_eq!(imap_mode(993).unwrap(), TlsMode::Implicit);
+        with_extra_ca_env(None, || {
+            match imap_mode(143) {
+                Ok(TlsMode::StartTls) => {}
+                other => panic!("{other:?}"),
+            }
+            match imap_mode(80) {
+                Err(Error::TlsPolicy(_)) => {}
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(imap_mode(993).unwrap(), TlsMode::Implicit);
+        });
+        // Lab high ports allowed only when EXTRA_CA is set (still TLS).
+        let dir = tempfile::tempdir().unwrap();
+        crate::server::paths::with_goblind_home(Some(dir.path()), || {
+            crate::server::tlsutil::ensure_certs().unwrap();
+            let ca = crate::server::tlsutil::ca_file();
+            with_extra_ca_env(Some(&ca), || {
+                assert_eq!(imap_mode(1993).unwrap(), TlsMode::Implicit);
+                assert_eq!(smtp_mode(1465).unwrap(), TlsMode::Implicit);
+            });
+        });
     }
 
     #[test]
