@@ -14,6 +14,10 @@ path = "src/main.rs"
 name = "goblind"
 path = "src/bin/goblind.rs"
 
+[[bin]]
+name = "goblin-gui"
+path = "src/bin/goblin-gui.rs"
+
 [features]
 default = []
 keyring = ["dep:keyring"]
@@ -40,6 +44,8 @@ hickory-resolver = "0.24"
 rand = "0.8"
 rsa = { version = "0.9", features = ["pem", "sha2"] }
 sha2 = "0.10"
+eframe = "0.29"
+egui = "0.29"
 
 [dev-dependencies]
 tempfile = "3"

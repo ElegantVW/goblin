@@ -82,6 +82,27 @@ TUI: `/` hunt · `[]` wake · `N` summon · `X` dismiss · `a` parcel.
 
 Linux paths: `~/.config/goblin/`, `~/.cache/goblin/mail/{unread,read,trash}/`.
 
+## Windows
+
+Desktop users get **Goblin GUI** (`goblin-gui.exe`). The installer creates a Desktop / Start Menu shortcut to the GUI only.
+
+PowerShell / Windows Terminal (optional):
+
+```powershell
+goblin who
+goblin steal
+goblin          # terminal TUI
+```
+
+Build installer (on Windows, with [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
+
+```powershell
+.\packaging\windows\build.ps1
+# → dist\windows\Goblin-Setup-0.1.0.exe
+```
+
+Printable Purelymail → Goblin cutover: [docs/MIGRATE-PURELYMAIL.md](docs/MIGRATE-PURELYMAIL.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

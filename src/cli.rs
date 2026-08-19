@@ -351,6 +351,19 @@ fn cmd_import_aerc(file: Option<PathBuf>) -> Result<u8, Error> {
     Ok(0)
 }
 
+/// Steal/sync for CLI and GUI. Returns exit code; `written` is in the store.
+pub fn steal_mail(
+    quiet: bool,
+    no_notify: bool,
+    all: bool,
+    force: bool,
+    folder: Option<String>,
+    limit: usize,
+    account: Option<String>,
+) -> Result<u8, Error> {
+    cmd_sync(quiet, no_notify, all, force, folder, limit, account)
+}
+
 fn cmd_sync(
     quiet: bool,
     no_notify: bool,
