@@ -1,0 +1,33 @@
+[Unit]
+Description=goblind — company mail server (no Purelymail)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=evenweaker
+Group=evenweaker
+Environment=GOBLIND_HOME=/home/evenweaker/goblind-data
+Environment=GOBLIND_EHLO=mail.vanguardaautomovel.com
+# Real LE certs later; lab CA works for your clients with GOBLIN_EXTRA_CA
+WorkingDirectory=/home/evenweaker/goblind-data
+ExecStart=/home/evenweaker/.local/bin/goblind run --bind 0.0.0.0 --smtp-in 25 --smtp-sub 465 --imap 993
+Restart=on-failure
+RestartSec=5
+
+# Bind privileged ports without full root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+# Hardening (safe defaults)
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/evenweaker/goblind-data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

@@ -359,19 +359,18 @@ fn ehlo_has_starttls(text: &str) -> bool {
 }
 
 fn ehlo_name() -> String {
-    hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "localhost".into())
-        .chars()
-        .map(|c| {
-            if c.is_ascii_graphic() && c != ' ' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    if let Ok(v) = std::env::var("GOBLIND_EHLO") {
+        let v = v.trim();
+        if !v.is_empty() {
+            return v.to_ascii_lowercase();
+        }
+    }
+    if let Ok(file) = config::load_or_empty() {
+        if !file.domain.is_empty() {
+            return format!("mail.{}", file.domain.to_ascii_lowercase());
+        }
+    }
+    "mail.localhost".into()
 }
 
 fn smtp_data_payload(raw: &[u8]) -> Vec<u8> {
