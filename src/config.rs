@@ -250,7 +250,7 @@ impl AccountFile {
             .accounts
             .iter()
             .position(|a| a.name == name)
-            .ok_or_else(|| Error::say(format!("no nest named {name:?}"), "goblin nest show"))?;
+            .ok_or_else(|| Error::say(format!("no goblin named {name:?}"), "goblin who"))?;
         let acc = self.accounts.remove(idx);
         if self.default == name {
             self.default = self

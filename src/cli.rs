@@ -13,6 +13,10 @@ use std::path::{Path, PathBuf};
 
 pub fn dispatch(cmd: Cmd) -> Result<u8, Error> {
     match cmd {
+        Cmd::Summon { preset } => cmd_account_add(preset.as_deref()),
+        Cmd::Who => cmd_account_show(),
+        Cmd::Wake { name } => cmd_account_use(&name),
+        Cmd::Dismiss { name } => cmd_account_remove(name.as_deref()),
         Cmd::Nest { action } => match action {
             AccountCmd::Add { preset } => cmd_account_add(preset.as_deref()),
             AccountCmd::Show => cmd_account_show(),
@@ -64,7 +68,7 @@ pub fn dispatch(cmd: Cmd) -> Result<u8, Error> {
 pub fn load_accounts_file() -> Result<config::AccountFile, Error> {
     let path = paths::accounts_file();
     if !path.exists() {
-        return Err(Error::say("no nest yet", "goblin nest add"));
+        return Err(Error::say("no goblins yet", "goblin summon"));
     }
     config::load_accounts(&path)
 }
@@ -94,7 +98,7 @@ pub fn store() -> Store {
 fn cmd_account_show() -> Result<u8, Error> {
     let path = paths::accounts_file();
     if !path.exists() {
-        return Err(Error::say("no nest yet", "goblin nest add"));
+        return Err(Error::say("no goblins yet", "goblin summon"));
     }
     let file = config::load_accounts(&path)?;
     for acc in &file.accounts {
@@ -107,7 +111,7 @@ fn cmd_account_show() -> Result<u8, Error> {
 pub fn remove_account(name: &str) -> Result<String, Error> {
     let path = writable_accounts_path();
     if !path.exists() {
-        return Err(Error::say("no nest yet", "goblin nest add"));
+        return Err(Error::say("no goblins yet", "goblin summon"));
     }
     let mut file = config::load_accounts(&path)?;
     let acc = file.remove(name)?;
@@ -128,10 +132,10 @@ fn cmd_account_remove(name: Option<&str>) -> Result<u8, Error> {
         None => file.default.clone(),
     };
     if name.is_empty() {
-        return Err(Error::say("no nest yet", "goblin nest add"));
+        return Err(Error::say("no goblins yet", "goblin summon"));
     }
     let gone = remove_account(&name)?;
-    println!("dropped nest {gone}");
+    println!("{gone} returned to the dark");
     Ok(0)
 }
 
@@ -202,7 +206,7 @@ fn cmd_account_add(preset: Option<&str>) -> Result<u8, Error> {
     }
     let n = acc.name.clone();
     save_account(acc, &password, file_is_empty())?;
-    println!("saved nest {n}");
+    println!("woke {n}");
     Ok(0)
 }
 

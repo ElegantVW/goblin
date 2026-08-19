@@ -64,7 +64,8 @@ enum Screen {
     Compose { draft: Draft, confirm_quit: bool },
     NestPick { sel: usize },
     NestForm { form: NestForm },
-    NestDrop { name: String },
+    HordePick { sel: usize },
+    HordeBanish { name: String },
 }
 
 struct App {
@@ -118,7 +119,7 @@ pub fn run() -> Result<u8, Error> {
     };
     if app.acc_names.is_empty() {
         app.screen = Screen::NestPick { sel: 0 };
-        app.status = "pick a sky to join".into();
+        app.status = "summon a goblin — which sky do they watch?".into();
     }
     app.reload();
     let result = event_loop(&mut app, fd);
@@ -145,7 +146,8 @@ fn handle_key(app: &mut App, key: &str) -> Result<bool, Error> {
         Screen::Compose { .. } => handle_compose(app, key),
         Screen::NestPick { .. } => handle_nest_pick(app, key),
         Screen::NestForm { .. } => handle_nest_form(app, key),
-        Screen::NestDrop { .. } => handle_nest_drop(app, key),
+        Screen::HordePick { .. } => handle_horde_pick(app, key),
+        Screen::HordeBanish { .. } => handle_horde_banish(app, key),
     }
 }
 
@@ -235,12 +237,15 @@ fn handle_list(app: &mut App, key: &str) -> Result<bool, Error> {
             app.screen = Screen::NestPick { sel: 0 };
         }
         "X" => {
-            if app.acc_names.is_empty() || app.acc_name == "goblin" {
-                app.status = "no nest to drop".into();
+            if app.acc_names.is_empty() {
+                app.status = "no goblins to dismiss".into();
             } else {
-                app.screen = Screen::NestDrop {
-                    name: app.acc_name.clone(),
-                };
+                let sel = app
+                    .acc_names
+                    .iter()
+                    .position(|n| n == &app.acc_name)
+                    .unwrap_or(0);
+                app.screen = Screen::HordePick { sel };
             }
         }
         _ => {}
@@ -248,42 +253,67 @@ fn handle_list(app: &mut App, key: &str) -> Result<bool, Error> {
     Ok(false)
 }
 
-fn handle_nest_drop(app: &mut App, key: &str) -> Result<bool, Error> {
-    let Screen::NestDrop { name } = &app.screen else {
+fn handle_horde_pick(app: &mut App, key: &str) -> Result<bool, Error> {
+    let n = app.acc_names.len();
+    let Screen::HordePick { sel } = &mut app.screen else {
+        return Ok(false);
+    };
+    match key {
+        "esc" | "q" => {
+            app.screen = Screen::List;
+            app.status = "no one was sent away".into();
+        }
+        "j" | "down" => {
+            if *sel + 1 < n {
+                *sel += 1;
+            }
+        }
+        "k" | "up" => *sel = sel.saturating_sub(1),
+        "enter" | "o" => {
+            let name = app.acc_names.get(*sel).cloned();
+            if let Some(name) = name {
+                app.screen = Screen::HordeBanish { name };
+            }
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_horde_banish(app: &mut App, key: &str) -> Result<bool, Error> {
+    let Screen::HordeBanish { name } = &app.screen else {
         return Ok(false);
     };
     let name = name.clone();
     match key {
-        "y" | "Y" => {
-            match remove_account(&name) {
-                Ok(gone) => {
-                    let file = load_accounts_file().ok();
-                    app.acc_names = file
-                        .as_ref()
-                        .map(|f| f.accounts.iter().map(|a| a.name.clone()).collect())
-                        .unwrap_or_default();
-                    app.acc_name = file
-                        .map(|f| f.default)
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or_else(|| "goblin".into());
-                    if app.acc_names.is_empty() {
-                        app.screen = Screen::NestPick { sel: 0 };
-                        app.status = format!("dropped {gone} — pick a sky");
-                    } else {
-                        app.screen = Screen::List;
-                        app.status = format!("dropped nest {gone}");
-                    }
-                    app.reload();
-                }
-                Err(e) => {
+        "y" | "Y" => match remove_account(&name) {
+            Ok(gone) => {
+                let file = load_accounts_file().ok();
+                app.acc_names = file
+                    .as_ref()
+                    .map(|f| f.accounts.iter().map(|a| a.name.clone()).collect())
+                    .unwrap_or_default();
+                app.acc_name = file
+                    .map(|f| f.default)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "goblin".into());
+                if app.acc_names.is_empty() {
+                    app.screen = Screen::NestPick { sel: 0 };
+                    app.status = format!("{gone} returned to the dark — summon another");
+                } else {
                     app.screen = Screen::List;
-                    app.status = format!("{e}");
+                    app.status = format!("{gone} returned to the dark");
                 }
+                app.reload();
             }
-        }
+            Err(e) => {
+                app.screen = Screen::List;
+                app.status = format!("{e}");
+            }
+        },
         "esc" | "n" | "N" | "q" => {
             app.screen = Screen::List;
-            app.status = "kept the nest".into();
+            app.status = format!("{name} stays");
         }
         _ => {}
     }
@@ -378,7 +408,7 @@ fn handle_nest_form(app: &mut App, key: &str) -> Result<bool, Error> {
                 app.screen = Screen::NestPick { sel: 0 };
             } else {
                 app.screen = Screen::List;
-                app.status = "nest add abandoned".into();
+                app.status = "no goblin was summoned".into();
             }
         } else {
             form.confirm_quit = false;
@@ -519,7 +549,7 @@ fn commit_nest(app: &mut App) -> Result<bool, Error> {
     app.acc_names = names;
     app.acc_name = name.clone();
     app.screen = Screen::List;
-    app.status = format!("nest saved — {name}");
+    app.status = format!("woke {name}");
     app.reload();
     Ok(false)
 }
@@ -735,7 +765,10 @@ fn current_mail(app: &App) -> Option<MailMeta> {
     match &app.screen {
         Screen::Reader { .. } | Screen::List => visible(app).get(app.sel).map(|(_, m)| m.clone()),
         Screen::Compose { draft, .. } => draft.reply_to.clone(),
-        Screen::NestPick { .. } | Screen::NestForm { .. } | Screen::NestDrop { .. } => None,
+        Screen::NestPick { .. }
+        | Screen::NestForm { .. }
+        | Screen::HordePick { .. }
+        | Screen::HordeBanish { .. } => None,
     }
 }
 
@@ -968,7 +1001,8 @@ fn render(app: &App) -> String {
         } => render_compose(app, tw, th, draft, *confirm_quit),
         Screen::NestPick { sel } => render_nest_pick(app, tw, th, *sel),
         Screen::NestForm { form } => render_nest_form(app, tw, th, form),
-        Screen::NestDrop { name } => render_nest_drop(tw, name),
+        Screen::HordePick { sel } => render_horde_pick(app, tw, *sel),
+        Screen::HordeBanish { name } => render_horde_banish(tw, name),
     }
 }
 
@@ -993,7 +1027,7 @@ fn render_list(app: &App, tw: usize, th: usize) -> String {
         searching = searching
     );
     let runes = art::box_frame(
-        &["j/k move · / hunt · [] nest · N add · X drop · enter open · s steal · c compose · 1/2/3 box · q quit".into()],
+        &["j/k move · / hunt · [] wake · N summon · X dismiss · enter open · s steal · c compose · q quit".into()],
         "Runes",
         "",
         tw,
@@ -1172,9 +1206,9 @@ fn render_nest_pick(app: &App, tw: usize, _th: usize, sel: usize) -> String {
         }
     }
     let sub = if app.acc_names.is_empty() {
-        "pick a sky to join"
+        "which sky do they watch?"
     } else {
-        "add another nest"
+        "summon another goblin — which sky?"
     };
     let head = art::box_frame(&rows, "Goblin", sub, tw);
     let runes = art::box_frame(
@@ -1199,7 +1233,7 @@ fn render_nest_form(_app: &App, tw: usize, _th: usize, form: &NestForm) -> Strin
         sub.push_str(" · app password if your mail house asks for one");
     }
     if form.confirm_quit {
-        sub = "abandon this nest? y / any other key = stay".into();
+        sub = "leave without summoning? y / any other key = stay".into();
     } else if !form.status.is_empty() {
         sub = format!("{sub} · {}", form.status);
     }
@@ -1212,7 +1246,7 @@ fn render_nest_form(_app: &App, tw: usize, _th: usize, form: &NestForm) -> Strin
         }
     };
     let mut rows = vec![
-        row(form.field == NestField::Name, "nest name", &form.name),
+        row(form.field == NestField::Name, "goblin name", &form.name),
         row(form.field == NestField::Display, "your name", &form.display),
         row(form.field == NestField::Email, "email", &form.email),
         row(
@@ -1253,18 +1287,39 @@ fn render_nest_form(_app: &App, tw: usize, _th: usize, form: &NestForm) -> Strin
     format!("{head}\n{runes}")
 }
 
-fn render_nest_drop(tw: usize, name: &str) -> String {
-    let head = art::box_frame(
-        &[
-            format!("drop nest {name}?"),
-            "this forgets the password too.".into(),
-        ],
-        "Goblin",
-        "cannot undo",
+fn render_horde_pick(app: &App, tw: usize, sel: usize) -> String {
+    let mut rows = Vec::new();
+    for (i, name) in app.acc_names.iter().enumerate() {
+        let mark = if i == sel { "✦" } else { " " };
+        let line = format!(" {mark}  {name}");
+        if i == sel {
+            rows.push(art::paint(&line, &[art::BOLD, art::BLUSH]));
+        } else {
+            rows.push(art::paint(&line, &[art::SILVER]));
+        }
+    }
+    let head = art::box_frame(&rows, "Goblin", "which goblin returns to the dark?", tw);
+    let runes = art::box_frame(
+        &["↑↓/j/k choose · enter · esc never mind".into()],
+        "Runes",
+        "",
         tw,
     );
+    format!("{head}\n{runes}")
+}
+
+pub fn banish_lines(name: &str) -> Vec<String> {
+    vec![
+        format!("Send “{name}” back to the dark?"),
+        "Their secret leaves the house.".into(),
+        "Letters already stolen stay in the pile.".into(),
+    ]
+}
+
+fn render_horde_banish(tw: usize, name: &str) -> String {
+    let head = art::box_frame(&banish_lines(name), "Goblin", "cannot undo", tw);
     let runes = art::box_frame(
-        &["y drop · n keep".into()],
+        &["y banish · n they stay".into()],
         "Runes",
         "",
         tw,
@@ -1275,6 +1330,17 @@ fn render_nest_drop(tw: usize, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[test]
+    fn banish_copy_is_fae_not_nest() {
+        let lines = banish_lines("work");
+        let blob = lines.join(" ");
+        assert!(blob.contains("dark"), "{blob}");
+        assert!(blob.contains("work"), "{blob}");
+        assert!(!blob.to_ascii_lowercase().contains("nest"), "{blob}");
+        assert!(!blob.to_ascii_lowercase().contains("account"), "{blob}");
+    }
 
     #[test]
     fn password_render_is_bullets_secret_stays() {

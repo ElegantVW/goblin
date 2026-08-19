@@ -33,8 +33,22 @@ pub struct Args {
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
-    /// Who we are (add / show / use a nest)
-    #[command(name = "nest", alias = "account")]
+    /// Summon a goblin (join a sky)
+    #[command(name = "summon")]
+    Summon {
+        #[arg(long)]
+        preset: Option<String>,
+    },
+    /// Name the horde
+    Who,
+    /// Wake a goblin
+    Wake { name: String },
+    /// Send a goblin back to the dark
+    Dismiss {
+        name: Option<String>,
+    },
+    /// Old nest/account words
+    #[command(name = "nest", alias = "account", hide = true)]
     Nest {
         #[command(subcommand)]
         action: AccountCmd,
@@ -214,7 +228,7 @@ mod tests {
         let help = cmd.render_long_help().to_string();
         for needle in [
             "steal", "watch", "peek", "read", "pile", "keep", "trash", "send", "squeak",
-            "hunt", "parcel", "nest",
+            "hunt", "parcel", "summon", "who", "wake", "dismiss",
         ] {
             assert!(help.contains(needle), "missing {needle} in:\n{help}");
         }

@@ -22,7 +22,7 @@ cd ~/goblin && ./build.sh install
 ## First run
 
 ```bash
-goblin nest add          # pick purelymail / google / disroot / outlook / yahoo
+goblin summon            # pick purelymail / google / disroot / outlook / yahoo
 goblin steal
 goblin
 ```
@@ -30,9 +30,9 @@ goblin
 ## Commands
 
 ```
-goblin                         open the nest
-goblin nest add|show|use|remove
-goblin nest add --preset google
+goblin                         open the horde
+goblin summon [--preset google]
+goblin who · wake NAME · dismiss [NAME]
 goblin steal                   new letters
 goblin peek [unread|read|trash]
 goblin read 1
@@ -46,7 +46,7 @@ goblin squeak [--set FILE]
 
 Old names (`sync`, `list`, `show`, `search`, `account`…) still work as aliases.
 
-TUI: `/` hunt · `[]` nest · `a` open parcel · `n` next parcel.
+TUI: `/` hunt · `[]` wake · `N` summon · `X` dismiss · `a` parcel.
 
 Linux paths: `~/.config/goblin/`, `~/.cache/goblin/mail/{unread,read,trash}/`.
 

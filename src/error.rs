@@ -21,7 +21,7 @@ impl Error {
         match self {
             Error::Hint { next, .. } => Some(next.as_str()),
             Error::Usage(_) => None,
-            Error::Config(_) => Some("goblin nest add"),
+            Error::Config(_) => Some("goblin summon"),
             _ => None,
         }
     }
