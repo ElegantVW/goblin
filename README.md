@@ -1,8 +1,8 @@
-# Goblin
+# Goblin — mail spirit. Ask him. **No aerc.**
 
-Mail spirit. Ask him. **No aerc.**
+Rust engine for [faeOS](https://github.com/ElegantVW/faeOS) and for company use. One binary: CLI + TUI. TLS-only, secrets in keyring — never in JSON, URLs, or logs.
 
-Rust engine for [faeOS](https://github.com/ElegantVW/faeOS) and for company use. One binary: CLI + TUI.
+Status: working TUI + CLI (`summon/who/wake/mend/dismiss/steal/peek/read/send/hunt/watch/keep/trash/parcel/squeak`). Voice: `goblin: <one sentence>` + `next: <one thing>`.
 
 ## Rules
 
