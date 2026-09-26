@@ -1,3 +1,5 @@
+![Goblin hero](assets/hero/goblin.svg)
+
 # Goblin — mail spirit. Ask him. **No aerc.**
 
 Rust engine for [faeOS](https://github.com/ElegantVW/faeOS) and for company use. One binary: CLI + TUI. TLS-only, secrets in keyring — never in JSON, URLs, or logs.
