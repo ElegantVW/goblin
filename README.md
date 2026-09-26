@@ -4,6 +4,19 @@ Rust engine for [faeOS](https://github.com/ElegantVW/faeOS) and for company use.
 
 Status: working TUI + CLI (`summon/who/wake/mend/dismiss/steal/peek/read/send/hunt/watch/keep/trash/parcel/squeak`). Voice: `goblin: <one sentence>` + `next: <one thing>`.
 
+## Look
+
+![Goblin first run — pick a sky](assets/screenshots/goblin-summon.png)
+![Goblin steal with no accounts yet](assets/screenshots/goblin-steal.png)
+
+```
+/\   /\
+ |   | 
+ |o o| 
+ |   | 
+  \_/  
+```
+
 ## Rules
 
 - **TLS required.** IMAP is 993 (implicit TLS) or 143 + STARTTLS. SMTP is 465 (implicit TLS) or 587 + STARTTLS. Certificate verification is on. There is no insecure flag.
