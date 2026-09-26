@@ -969,7 +969,7 @@ fn open_selected_attachment(app: &mut App) -> Result<(), Error> {
         app.status = if m.attachments.is_empty() {
             "no attachments".into()
         } else {
-            "attachments not on disk — sync --force".into()
+            "attachments not on disk — run goblin steal --force".into()
         };
         return Ok(());
     };
@@ -1090,14 +1090,14 @@ fn sync_now(app: &mut App) {
             Ok(r) => {
                 if r.written > 0 {
                     let _ = notify::play();
-                    app.status = format!("synced — {} new mail(s) squeaked in", r.written);
+                    app.status = format!("stole — {} new letter(s) in the nest", r.written);
                 } else {
-                    app.status = "synced — nothing new".into();
+                    app.status = "stole — nothing new".into();
                 }
             }
-            Err(e) => app.status = format!("sync failed: {e}"),
+            Err(e) => app.status = format!("steal failed: {e}"),
         },
-        Err(e) => app.status = format!("sync failed: {e}"),
+        Err(e) => app.status = format!("steal failed: {e}"),
     }
     app.reload();
 }
@@ -1178,7 +1178,7 @@ fn render_list(app: &App, tw: usize, th: usize) -> String {
         String::new()
     };
     let sub = format!(
-        "{} · box: {} · unread: {unread_n} · last sync: {} · {}{sep}{searching}",
+        "{} · box: {} · unread: {unread_n} · last steal: {} · {}{sep}{searching}",
         app.acc_name,
         app.box_name.as_str(),
         last_sync(),
@@ -1205,7 +1205,7 @@ fn render_list(app: &App, tw: usize, th: usize) -> String {
     if vis.is_empty() {
         rows.push(art::paint(
             if app.query.is_empty() {
-                "  (no messages in this box — press s to sync) "
+                "  (no messages in this box — press s to steal) "
             } else {
                 "  (no matches) "
             },

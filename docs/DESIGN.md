@@ -16,9 +16,10 @@ Rust. Own repo, same install contract as Bulwark. Cross-OS. The same tree can gr
 
 ## v1.1 (this phase)
 
-- Search across unread/read/trash (`goblin search`, TUI `/`).
-- Attachments extracted on sync to `~/.cache/goblin/attach/{uid}/`; `goblin attach list|save|open`; TUI `a` / `n`.
-- Multiple accounts: `account add` upserts; `account show` lists; `account use NAME`; TUI `[` `]`; `sync --account NAME`.
+- Search across unread/read/trash (`goblin hunt`, TUI `/`).
+- Attachments extracted on steal to `~/.cache/goblin/attach/{uid}/`; `goblin parcel list|save|open`; TUI `a` / `n`.
+- Multiple accounts: `summon` upserts; `who` lists; `wake NAME`; TUI `[` `]`; `steal --account NAME`.
+- Voice: errors print `goblin: <one sentence>` + `next: <one thing>`, `detail:` only with `FAE_DEBUG=1`. Old names (`sync`, `list`, `show`, `search`, `account`…) parse as hidden aliases.
 
 ## Still later
 

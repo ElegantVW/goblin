@@ -208,6 +208,9 @@ fn main() -> ExitCode {
             if let Some(n) = e.hint_line() {
                 eprintln!("  next:  {n}");
             }
+            if let Some(d) = e.detail() {
+                eprintln!("  detail: {d}");
+            }
             return ExitCode::from(1);
         }
     };

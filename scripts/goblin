@@ -27,6 +27,5 @@ for c in "${CANDIDATES[@]}"; do
 done
 
 echo "goblin: engine not built yet." >&2
-echo "  build:  git clone git@github.com:ElegantVW/goblin.git ~/goblin" >&2
-echo "          cd ~/goblin && ./build.sh install" >&2
+echo "  next:   cd ~/goblin && ./build.sh install" >&2
 exit 127

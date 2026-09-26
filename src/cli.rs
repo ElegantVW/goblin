@@ -468,7 +468,7 @@ fn cmd_list(box_name: &str, plain: bool) -> Result<u8, Error> {
         return Ok(0);
     }
     println!(
-        "Goblin · {} in {} · last sync {}",
+        "Goblin · {} in {} · last steal {}",
         mails.len(),
         box_name.as_str(),
         last_sync()
@@ -505,14 +505,14 @@ fn cmd_bundle(snippet: usize, limit: usize) -> Result<u8, Error> {
     let store = store();
     let mut mails = store.load_mails(MailBox::Unread)?;
     if mails.is_empty() {
-        println!("(no unread messages on disk — run sync first)");
+        println!("(no unread messages on disk — run goblin steal first)");
         return Ok(0);
     }
     let snippet_n = snippet.clamp(80, 1200);
     let max = limit.clamp(1, 50);
     mails.truncate(max);
     println!(
-        "UNREAD DIGEST — {} message(s) (use filename for mail_move)\n",
+        "UNREAD DIGEST — {} message(s)\n",
         mails.len()
     );
     for (i, m) in mails.iter().enumerate() {
@@ -571,11 +571,11 @@ fn cmd_move(dest: &str, files: Vec<String>, all: bool, local_only: bool) -> Resu
                 server_msg = match dest {
                     MailBox::Read => {
                         imap::mark_seen(&acc, password, &m.uid)?;
-                        format!("uid {} marked Seen on server", m.uid)
+                        String::from("marked read on server")
                     }
                     MailBox::Trash => {
                         let folder = imap::trash(&acc, password, &m.uid)?;
-                        format!("uid {} moved to {folder}", m.uid)
+                        format!("moved to {folder} on server")
                     }
                     MailBox::Unread => unreachable!(),
                 };
@@ -640,7 +640,7 @@ fn read_body(path: Option<&Path>) -> Result<String, Error> {
 
 fn cmd_search(query: &str, plain: bool) -> Result<u8, Error> {
     if query.trim().is_empty() {
-        return Err(Error::Usage("goblin search <query>".into()));
+        return Err(Error::Usage("goblin hunt <query>".into()));
     }
     let store = store();
     let hits = crate::search::search_store(&store, query)?;
@@ -686,7 +686,7 @@ fn cmd_attach(action: AttachCmd) -> Result<u8, Error> {
             }
             if files.is_empty() {
                 for (i, name) in m.attachments.iter().enumerate() {
-                    println!("[{:>2}] {name}  (not on disk — re-sync with --force)", i + 1);
+                    println!("[{:>2}] {name}  (not on disk — run goblin steal --force)", i + 1);
                 }
                 return Ok(0);
             }
