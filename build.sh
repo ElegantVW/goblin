@@ -23,9 +23,14 @@ if [[ "${1:-}" == "install" ]]; then
   }
 
   install_launcher "$HOME/bin/goblin"
-  if [[ -d "$HOME/faeos/bin" ]]; then
-    install_launcher "$HOME/faeos/bin/goblin"
-  fi
+  # The kit directory is `~/faeOS` with a capital S. Checking only the
+  # lowercase `~/faeos` meant the launcher never reached the kit on this
+  # machine, silently. bulwark/build.sh already checks both; do the same.
+  for kit in "$HOME/faeOS/bin" "$HOME/faeos/bin"; do
+    if [[ -d "$kit" ]]; then
+      install_launcher "$kit/goblin"
+    fi
+  done
 
   echo "installed engine → $LIB/goblin"
   echo "launcher        → $HOME/bin/goblin"
