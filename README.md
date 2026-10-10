@@ -6,6 +6,8 @@ Rust engine for [faeOS](https://github.com/ElegantVW/faeOS) and for company use.
 
 Status: working TUI + CLI (`summon/who/wake/mend/dismiss/steal/peek/read/send/hunt/watch/keep/trash/parcel/squeak`). Voice: `goblin: <one sentence>` + `next: <one thing>`.
 
+For: terminal IMAP/SMTP mail with secrets in keyring. Not for: Gmail OAuth, Exchange, bulk mail.
+
 ## Look
 
 ![Goblin first run — pick a sky](assets/screenshots/goblin-summon.png)
