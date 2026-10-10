@@ -3,13 +3,46 @@
 use crate::error::Error;
 use crate::store::{MailBox, MailMeta, Store};
 
-pub fn matches(mail: &MailMeta, query: &str) -> bool {
+/// Box-aware match. Query language (all case-insensitive):
+/// bare words = AND-substring over from/to/subject/body/account/uid;
+/// `from:X`, `subj:X`, `has:attach`, `is:unread|read|trash`.
+pub fn matches_in(mail: &MailMeta, box_name: Option<MailBox>, query: &str) -> bool {
     let q = query.trim();
     if q.is_empty() {
         return true;
     }
-    let q = q.to_ascii_lowercase();
-    haystack(mail).contains(&q)
+    let hay = haystack(mail);
+    for tok in q.split_whitespace() {
+        let low = tok.to_ascii_lowercase();
+        if let Some(v) = low.strip_prefix("from:") {
+            if !mail.from.to_ascii_lowercase().contains(v) {
+                return false;
+            }
+        } else if let Some(v) = low.strip_prefix("subj:").or_else(|| low.strip_prefix("subject:"))
+        {
+            if !mail.subject.to_ascii_lowercase().contains(v) {
+                return false;
+            }
+        } else if low == "has:attach" {
+            if mail.attachments.is_empty() {
+                return false;
+            }
+        } else if let Some(v) = low.strip_prefix("is:") {
+            let want = match v {
+                "unread" => Some(MailBox::Unread),
+                "read" => Some(MailBox::Read),
+                "trash" => Some(MailBox::Trash),
+                _ => None,
+            };
+            match (want, box_name) {
+                (Some(w), Some(b)) if w == b => {}
+                _ => return false,
+            }
+        } else if !hay.contains(&low) {
+            return false;
+        }
+    }
+    true
 }
 
 fn haystack(mail: &MailMeta) -> String {
@@ -24,7 +57,7 @@ pub fn search_store(store: &Store, query: &str) -> Result<Vec<(MailBox, MailMeta
     let mut out = Vec::new();
     for b in MailBox::all() {
         for m in store.load_mails(b)? {
-            if matches(&m, query) {
+            if matches_in(&m, Some(b), query) {
                 out.push((b, m));
             }
         }
@@ -50,16 +83,32 @@ mod tests {
     #[test]
     fn matches_from_subject_body_case_insensitive() {
         let m = mail("Ada <ada@x>", "Quarterly Report", "please see attached");
-        assert!(matches(&m, "ADA"));
-        assert!(matches(&m, "report"));
-        assert!(matches(&m, "ATTACHED"));
-        assert!(!matches(&m, "zebra"));
+        assert!(matches_in(&m, None, "ADA"));
+        assert!(matches_in(&m, None, "report"));
+        assert!(matches_in(&m, None, "ATTACHED"));
+        assert!(!matches_in(&m, None, "zebra"));
+    }
+
+    #[test]
+    fn query_operators() {
+        let mut m = mail("Ada <ada@x>", "Quarterly Report", "please see attached");
+        assert!(matches_in(&m, None, "from:ada report"));
+        assert!(!matches_in(&m, None, "from:bob"));
+        assert!(matches_in(&m, None, "subj:quarterly"));
+        assert!(!matches_in(&m, None, "subj:invoice"));
+        assert!(!matches_in(&m, None, "has:attach"));
+        m.attachments.push("bill.pdf".into());
+        assert!(matches_in(&m, None, "has:attach"));
+        assert!(matches_in(&m, Some(MailBox::Unread), "is:unread"));
+        assert!(!matches_in(&m, Some(MailBox::Read), "is:unread"));
+        assert!(!matches_in(&m, None, "is:unread"));
+        assert!(!matches_in(&m, Some(MailBox::Unread), "is:zzz"));
     }
 
     #[test]
     fn empty_query_matches_all() {
-        assert!(matches(&mail("a", "b", "c"), ""));
-        assert!(matches(&mail("a", "b", "c"), "   "));
+        assert!(matches_in(&mail("a", "b", "c"), None, ""));
+        assert!(matches_in(&mail("a", "b", "c"), None, "   "));
     }
 
     #[test]

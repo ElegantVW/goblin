@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 pub const RESET: &str = "\x1b[0m";
 pub const BOLD: &str = "\x1b[1m";
+pub const UNDERLINE: &str = "\x1b[4m";
 pub const ITALIC: &str = "\x1b[3m";
 pub const DIM: &str = "\x1b[2m";
 pub const PINK: &str = "\x1b[38;5;175m";
@@ -21,6 +22,7 @@ pub const ERR: &str = "\x1b[38;5;197m";
 const ENTER_ALT: &str = "\x1b[?1049h\x1b[?25l";
 const LEAVE_ALT: &str = "\x1b[?25h\x1b[?7h\x1b[?1049l";
 const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
+const MOUSE_HOVER: &str = "\x1b[?1003h";
 const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 const TUI_HYGIENE: &str = "\x1b[0m\x1b[?25h\x1b[?7h\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 
@@ -42,6 +44,15 @@ pub fn mouse_enabled() -> bool {
     std::env::var("GOBLIN_MOUSE")
         .map(|v| v != "0")
         .unwrap_or(true)
+}
+
+/// Any-motion reports (hover). Noisy by design; the TUI repaints
+/// only when the hovered row actually changes.
+pub fn hover_enabled() -> bool {
+    mouse_enabled()
+        && std::env::var("GOBLIN_HOVER")
+            .map(|v| v != "0")
+            .unwrap_or(true)
 }
 
 pub fn color_ok() -> bool {
@@ -597,6 +608,9 @@ pub fn tui_begin(fd: RawFd, hold_name: &str) {
     write_raw(fd, ENTER_ALT);
     if mouse_enabled() {
         write_raw(fd, MOUSE_ON);
+        if hover_enabled() {
+            write_raw(fd, MOUSE_HOVER);
+        }
     }
     let owned = if fd > 2 {
         Some(unsafe { OwnedFd::from_raw_fd(fd) })

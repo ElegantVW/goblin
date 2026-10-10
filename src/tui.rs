@@ -86,6 +86,8 @@ struct App {
     acc_names: Vec<String>,
     query: String,
     searching: bool,
+    sort: SortKey,
+    hover: Option<usize>,
     hits: Vec<Hit>,
     last_click: Option<(std::time::Instant, u16, u16)>,
 }
@@ -106,6 +108,34 @@ enum HitKind {
     ReaderBody { mid_y: u16 },
     /// Compose header field.
     ComposeField(Field),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SortKey {
+    DateDesc,
+    DateAsc,
+    From,
+    Subject,
+}
+
+impl SortKey {
+    fn next(self) -> SortKey {
+        match self {
+            SortKey::DateDesc => SortKey::DateAsc,
+            SortKey::DateAsc => SortKey::From,
+            SortKey::From => SortKey::Subject,
+            SortKey::Subject => SortKey::DateDesc,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            SortKey::DateDesc => "date↓",
+            SortKey::DateAsc => "date↑",
+            SortKey::From => "from",
+            SortKey::Subject => "subj",
+        }
+    }
 }
 
 /// Map a click row onto a list that starts at `rows_start` (1-based)
@@ -154,6 +184,8 @@ pub fn run() -> Result<u8, Error> {
         acc_names,
         query: String::new(),
         searching: false,
+        sort: SortKey::DateDesc,
+        hover: None,
         hits: Vec::new(),
         last_click: None,
     };
@@ -199,6 +231,8 @@ pub fn run_mend(name: Option<String>) -> Result<u8, Error> {
         acc_names,
         query: String::new(),
         searching: false,
+        sort: SortKey::DateDesc,
+        hover: None,
         hits: Vec::new(),
         last_click: None,
     };
@@ -236,6 +270,7 @@ fn event_loop(app: &mut App, fd: i32) -> Result<u8, Error> {
         let frame = render(app);
         art::paint_frame(fd, &frame);
         // Wait for a keypress or a resize; idle ticks repaint nothing.
+        // Motion floods are also skipped unless the hovered row changed.
         loop {
             let key = art::tui_read_key(fd, Some(200));
             if key.is_empty() {
@@ -247,8 +282,13 @@ fn event_loop(app: &mut App, fd: i32) -> Result<u8, Error> {
                 }
                 continue;
             }
+            let motion = key.starts_with("mouse:35,");
+            let h0 = app.hover;
             if handle_key(app, &key)? {
                 return Ok(0);
+            }
+            if motion && app.hover == h0 {
+                continue;
             }
             break;
         }
@@ -285,6 +325,20 @@ fn handle_mouse(app: &mut App, m: &str) -> Result<bool, Error> {
         _ => return Ok(false),
     };
     if !press {
+        return Ok(false);
+    }
+    // Any-motion reports (1003): button bits 3, motion flag set.
+    if (b & 192) == 0 && (b & 32) != 0 && (b & 3) == 3 {
+        if matches!(&app.screen, Screen::List) {
+            let row = app.hits.iter().find(|h| h.y == y).and_then(|h| match h.kind {
+                HitKind::ListRow(i) => Some(i),
+                _ => None,
+            });
+            let n = visible(app).len();
+            app.hover = row.filter(|i| *i < n);
+        } else if app.hover.is_some() {
+            app.hover = None;
+        }
         return Ok(false);
     }
     // Wheel: 64 up, 65 down.
@@ -408,6 +462,10 @@ fn handle_list(app: &mut App, key: &str) -> Result<bool, Error> {
         "1" | "u" => switch_box(app, MailBox::Unread),
         "2" => switch_box(app, MailBox::Read),
         "3" | "b" => switch_box(app, MailBox::Trash),
+        "O" => {
+            app.sort = app.sort.next();
+            app.sel = 0;
+        }
         "c" => {
             app.screen = Screen::Compose {
                 draft: Draft {
@@ -1031,7 +1089,7 @@ fn send_draft(app: &mut App) -> Result<bool, Error> {
 }
 
 fn visible(app: &App) -> Vec<(MailBox, MailMeta)> {
-    if app.query.trim().is_empty() {
+    let mut out: Vec<(MailBox, MailMeta)> = if app.query.trim().is_empty() {
         app.mails
             .iter()
             .cloned()
@@ -1039,7 +1097,23 @@ fn visible(app: &App) -> Vec<(MailBox, MailMeta)> {
             .collect()
     } else {
         crate::search::search_store(&app.store, &app.query).unwrap_or_default()
+    };
+    // Dates are RFC3339, so plain string order is newest/oldest order.
+    match app.sort {
+        SortKey::DateDesc => out.sort_by(|a, b| b.1.date.cmp(&a.1.date).then(b.1.uid.cmp(&a.1.uid))),
+        SortKey::DateAsc => out.sort_by(|a, b| a.1.date.cmp(&b.1.date).then(a.1.uid.cmp(&b.1.uid))),
+        SortKey::From => out.sort_by(|a, b| {
+            a.1.from
+                .to_ascii_lowercase()
+                .cmp(&b.1.from.to_ascii_lowercase())
+        }),
+        SortKey::Subject => out.sort_by(|a, b| {
+            a.1.subject
+                .to_ascii_lowercase()
+                .cmp(&b.1.subject.to_ascii_lowercase())
+        }),
     }
+    out
 }
 
 fn current_mail(app: &App) -> Option<MailMeta> {
@@ -1236,6 +1310,9 @@ impl App {
         if self.sel >= n {
             self.sel = n.saturating_sub(1);
         }
+        if self.hover.map(|h| h >= n).unwrap_or(false) {
+            self.hover = None;
+        }
     }
 }
 
@@ -1306,16 +1383,17 @@ fn render_list(app: &App, hits: &mut Vec<Hit>, tw: usize, th: usize) -> String {
         String::new()
     };
     let sub = format!(
-        "{} · box: {} · unread: {unread_n} · last steal: {} · {}{sep}{searching}",
+        "{} · box: {} · sort: {} · unread: {unread_n} · last steal: {} · {}{sep}{searching}",
         app.acc_name,
         app.box_name.as_str(),
+        app.sort.label(),
         last_sync(),
         app.status,
         sep = if searching.is_empty() { "" } else { " · " },
         searching = searching
     );
     let runes = art::box_frame(
-        &["j/k · / hunt · [] wake · N summon · E mend · X dismiss · enter · s steal · c compose · q".into()],
+        &["j/k · / hunt · [] wake · N summon · E mend · X dismiss · O sort · enter · s steal · c compose · q".into()],
         "Runes",
         "",
         tw,
@@ -1375,6 +1453,8 @@ fn render_list(app: &App, hits: &mut Vec<Hit>, tw: usize, th: usize) -> String {
             );
             if i == app.sel {
                 rows.push(art::paint(&line, &[art::BOLD, art::BLUSH]));
+            } else if app.hover == Some(i) {
+                rows.push(art::paint(&line, &[art::DIM, art::UNDERLINE]));
             } else {
                 rows.push(art::paint(&line, &[art::SILVER]));
             }
