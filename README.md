@@ -4,9 +4,23 @@
 
 Rust engine for [faeOS](https://github.com/ElegantVW/faeOS) and for company use. One binary: CLI + TUI. TLS-only, secrets in keyring — never in JSON, URLs, or logs.
 
-Status: working TUI + CLI (`summon/who/wake/mend/dismiss/steal/peek/read/send/hunt/watch/keep/trash/parcel/squeak`). Voice: `goblin: <one sentence>` + `next: <one thing>`.
+Status: **0.1.1** — looking for testers. TLS-only. Secrets in keyring.
+Downloads (linux): [Grove](https://elegantvw.github.io/grove/#app-goblin) /
+[Releases](https://github.com/ElegantVW/goblin/releases). Windows and
+macOS are source this pass (`docs/PORT.md`). Voice: `goblin: <one sentence>`
++ `next: <one thing>`.
 
 For: terminal IMAP/SMTP mail with secrets in keyring. Not for: Gmail OAuth, Exchange, bulk mail.
+
+## Looking for testers
+
+We want reports from **Linux** (Debian, Q4OS, others), **Windows** (WSL
++ linux binary), and **macOS** (build from source). Open a
+[GitHub issue](https://github.com/ElegantVW/goblin/issues) with the
+smoke list in [`docs/PORT.md`](docs/PORT.md), or email
+evenweaker@disroot.org with subject `[goblin test]`. OS, terminal,
+preset, what `steal`/`peek` showed, what broke. No passwords or mail
+bodies.
 
 ## Look
 
@@ -29,12 +43,14 @@ For: terminal IMAP/SMTP mail with secrets in keyring. Not for: Gmail OAuth, Exch
 
 ## Install
 
+Grove linux vessel, or build:
+
 ```bash
-git clone git@github.com:ElegantVW/goblin.git ~/goblin
+git clone https://github.com/ElegantVW/goblin.git ~/goblin
 cd ~/goblin && ./build.sh install
 ```
 
-`build.sh install` writes the ELF to `~/.local/lib/faeos/goblin` and a launcher to `~/bin/goblin`. Override the binary with `GOBLIN_BIN`.
+`build.sh install` writes the ELF to `~/.local/lib/faeos/goblin` and a launcher to `~/bin/goblin`. Override the binary with `GOBLIN_BIN`. Port notes: [`docs/PORT.md`](docs/PORT.md).
 
 ## First run
 
