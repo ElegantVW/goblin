@@ -1,6 +1,6 @@
 # Goblin changelog
 
-## 2026-10-10 — v0.1.1 vessel downloads
+## 2026-10-10 — letter-pouch (v0.1.1)
 
 - GitHub Release: linux x86_64. Grove card has the pills. Windows and
   macOS are source (`docs/PORT.md`) — TUI is unix termios. TLS-only.
