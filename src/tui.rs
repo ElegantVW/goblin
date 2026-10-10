@@ -67,6 +67,7 @@ enum Screen {
     NestForm { form: NestForm },
     HordePick { sel: usize, why: HordeWhy },
     HordeBanish { name: String },
+    HireDash { sel: usize, prev_query: String },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -88,6 +89,7 @@ struct App {
     searching: bool,
     sort: SortKey,
     hover: Option<usize>,
+    hire: crate::hire::Ledger,
     hits: Vec<Hit>,
     last_click: Option<(std::time::Instant, u16, u16)>,
 }
@@ -108,6 +110,8 @@ enum HitKind {
     ReaderBody { mid_y: u16 },
     /// Compose header field.
     ComposeField(Field),
+    /// Hire dashboard row.
+    HireRow(usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -185,6 +189,7 @@ pub fn run() -> Result<u8, Error> {
         query: String::new(),
         searching: false,
         sort: SortKey::DateDesc,
+        hire: crate::hire::Ledger::load(crate::hire::ledger_path()),
         hover: None,
         hits: Vec::new(),
         last_click: None,
@@ -232,6 +237,7 @@ pub fn run_mend(name: Option<String>) -> Result<u8, Error> {
         query: String::new(),
         searching: false,
         sort: SortKey::DateDesc,
+        hire: crate::hire::Ledger::load(crate::hire::ledger_path()),
         hover: None,
         hits: Vec::new(),
         last_click: None,
@@ -307,6 +313,7 @@ fn handle_key(app: &mut App, key: &str) -> Result<bool, Error> {
         Screen::NestForm { .. } => handle_nest_form(app, key),
         Screen::HordePick { .. } => handle_horde_pick(app, key),
         Screen::HordeBanish { .. } => handle_horde_banish(app, key),
+        Screen::HireDash { .. } => handle_hire(app, key),
     }
 }
 
@@ -387,6 +394,14 @@ fn handle_mouse(app: &mut App, m: &str) -> Result<bool, Error> {
         Some(HitKind::ComposeField(f)) => {
             if let Screen::Compose { draft, .. } = &mut app.screen {
                 draft.field = f;
+            }
+        }
+        Some(HitKind::HireRow(i)) => {
+            if let Screen::HireDash { sel, .. } = &mut app.screen {
+                *sel = i;
+            }
+            if double {
+                open_hire_request(app, i)?;
             }
         }
         None => {}
@@ -480,6 +495,14 @@ fn handle_list(app: &mut App, key: &str) -> Result<bool, Error> {
             };
         }
         "r" | "R" => start_reply(app),
+        "H" => {
+            app.hire = crate::hire::Ledger::load(crate::hire::ledger_path());
+            app.hover = None;
+            app.screen = Screen::HireDash {
+                sel: 0,
+                prev_query: app.query.clone(),
+            };
+        }
         "N" => {
             app.screen = Screen::NestPick { sel: 0 };
         }
@@ -1116,6 +1139,106 @@ fn visible(app: &App) -> Vec<(MailBox, MailMeta)> {
     out
 }
 
+/// Hire requests, agenda-sorted: doing first (by deadline), then new,
+/// then done. The mailbox is the source of truth; the ledger only
+/// remembers status on this machine.
+fn hire_requests(app: &App) -> Vec<crate::hire::Request> {
+    let found = crate::search::search_store(&app.store, "hire:").unwrap_or_default();
+    let mut out = Vec::new();
+    for (mailbox, m) in found {
+        if let Some((service, name, date)) = crate::hire::parse_subject(&m.subject) {
+            out.push(crate::hire::Request {
+                uid: m.uid.clone(),
+                service,
+                name,
+                date,
+                deadline: crate::hire::deadline_of(&m.body),
+                mailbox: mailbox.as_str().to_string(),
+            });
+        }
+    }
+    let rank = |uid: &str| crate::hire::rank(app.hire.status(uid));
+    let due = |d: &str| {
+        if d == "-" {
+            "~~~~".to_string()
+        } else {
+            d.to_string()
+        }
+    };
+    out.sort_by(|a, b| {
+        rank(&a.uid)
+            .cmp(&rank(&b.uid))
+            .then(due(&a.deadline).cmp(&due(&b.deadline)))
+    });
+    out
+}
+
+/// Jump from the dash to the request's mail in the List screen.
+fn open_hire_request(app: &mut App, idx: usize) -> Result<(), Error> {
+    let reqs = hire_requests(app);
+    let Some(r) = reqs.get(idx) else {
+        return Ok(());
+    };
+    let uid = r.uid.clone();
+    if app.query.trim().is_empty() {
+        app.query = "hire:".to_string();
+    }
+    app.screen = Screen::List;
+    app.reload();
+    if let Some(pos) = visible(app).iter().position(|(_, m)| m.uid == uid) {
+        app.sel = pos;
+        open_selected(app)?;
+    }
+    Ok(())
+}
+
+fn handle_hire(app: &mut App, key: &str) -> Result<bool, Error> {
+    let (sel, prev_query) = match &app.screen {
+        Screen::HireDash { sel, prev_query } => (*sel, prev_query.clone()),
+        _ => return Ok(false),
+    };
+    let n = hire_requests(app).len();
+    match key {
+        "q" | "esc" | "ctrl-c" => {
+            app.query = prev_query;
+            app.screen = Screen::List;
+            app.reload();
+        }
+        "j" | "down" => {
+            if let Screen::HireDash { sel, .. } = &mut app.screen {
+                if *sel + 1 < n {
+                    *sel += 1;
+                }
+            }
+        }
+        "k" | "up" => {
+            if let Screen::HireDash { sel, .. } = &mut app.screen {
+                *sel = sel.saturating_sub(1);
+            }
+        }
+        "home" => {
+            if let Screen::HireDash { sel, .. } = &mut app.screen {
+                *sel = 0;
+            }
+        }
+        "end" => {
+            if let Screen::HireDash { sel, .. } = &mut app.screen {
+                *sel = n.saturating_sub(1);
+            }
+        }
+        "enter" => open_hire_request(app, sel)?,
+        "m" => {
+            if let Some(r) = hire_requests(app).get(sel) {
+                let uid = r.uid.clone();
+                let st = app.hire.cycle(&uid);
+                app.status = format!("hire {uid} → {st}");
+            }
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
 fn current_mail(app: &App) -> Option<MailMeta> {
     match &app.screen {
         Screen::Reader { .. } | Screen::List => visible(app).get(app.sel).map(|(_, m)| m.clone()),
@@ -1123,7 +1246,8 @@ fn current_mail(app: &App) -> Option<MailMeta> {
         Screen::NestPick { .. }
         | Screen::NestForm { .. }
         | Screen::HordePick { .. }
-        | Screen::HordeBanish { .. } => None,
+        | Screen::HordeBanish { .. }
+        | Screen::HireDash { .. } => None,
     }
 }
 
@@ -1366,6 +1490,7 @@ fn render(app: &mut App) -> String {
         Screen::NestForm { form } => render_nest_form(app, tw, th, form),
         Screen::HordePick { sel, why } => render_horde_pick(app, tw, *sel, *why),
         Screen::HordeBanish { name } => render_horde_banish(tw, name),
+        Screen::HireDash { sel, .. } => render_hire(app, &mut hits, tw, th, *sel),
     };
     app.hits = hits;
     frame
@@ -1393,7 +1518,7 @@ fn render_list(app: &App, hits: &mut Vec<Hit>, tw: usize, th: usize) -> String {
         searching = searching
     );
     let runes = art::box_frame(
-        &["j/k · / hunt · [] wake · N summon · E mend · X dismiss · O sort · enter · s steal · c compose · q".into()],
+        &["j/k · / hunt · [] wake · N summon · E mend · X dismiss · O sort · H hire · enter · s steal · c compose · q".into()],
         "Runes",
         "",
         tw,
@@ -1407,6 +1532,7 @@ fn render_list(app: &App, hits: &mut Vec<Hit>, tw: usize, th: usize) -> String {
         start = app.sel + 1 - avail;
     }
     let vis = visible(app);
+    let now = chrono::Local::now().timestamp();
     // Click rows: y1 top border, then the wrapped subtitle, then the rule,
     // so the first body row sits at (subtitle lines + 3), 1-based.
     let body_w = tw.saturating_sub(4).max(1);
@@ -1449,7 +1575,7 @@ fn render_list(app: &App, hits: &mut Vec<Hit>, tw: usize, th: usize) -> String {
                 i + 1,
                 frm,
                 trunc(&m.subject, rest.saturating_sub(16)),
-                trunc(&m.date, 16)
+                trunc(&crate::hire::age_label(now, &m.date), 16)
             );
             if i == app.sel {
                 rows.push(art::paint(&line, &[art::BOLD, art::BLUSH]));
@@ -1606,6 +1732,71 @@ fn render_compose(
     }
     let body = art::box_frame(&body_rows, "letter", "", tw);
     format!("{head}\n{body}\n{runes}")
+}
+
+fn render_hire(app: &App, hits: &mut Vec<Hit>, tw: usize, th: usize, sel: usize) -> String {
+    let reqs = hire_requests(app);
+    let (mut new, mut doing, mut done) = (0, 0, 0);
+    for r in &reqs {
+        match app.hire.status(&r.uid) {
+            "doing" => doing += 1,
+            "done" => done += 1,
+            _ => new += 1,
+        }
+    }
+    let sub = format!(
+        "hire desk · {doing} doing · {new} new · {done} done · {}",
+        app.status
+    );
+    let runes = art::box_frame(
+        &["j/k move · enter open mail · m new→doing→done · q back".into()],
+        "Runes",
+        "",
+        tw,
+    );
+    let runes_h = art::line_count(&runes);
+    let head_chrome = 4;
+    let avail = th.saturating_sub(runes_h + 1 + head_chrome).max(3);
+    let body_w = tw.saturating_sub(4).max(1);
+    let sub_lines = art::wrap_plain(&art::strip_ansi(&sub), body_w).len().max(1);
+    let rows_start = sub_lines + 3;
+    let mut rows: Vec<String> = Vec::new();
+    if reqs.is_empty() {
+        rows.push(art::paint("  (no requests — the glass is quiet) ", &[art::MUTED]));
+    } else {
+        for (i, r) in reqs.iter().enumerate().take(avail) {
+            let g = match app.hire.status(&r.uid) {
+                "doing" => "◐",
+                "done" => "●",
+                _ => "○",
+            };
+            let line = format!(
+                "  {g} {:<8} {:<16} due {:<10}  {}",
+                trunc(&r.service, 8),
+                trunc(&r.name, 16),
+                trunc(&r.deadline, 10),
+                trunc(&r.date, 10),
+            );
+            if i == sel {
+                rows.push(art::paint(&line, &[art::BOLD, art::BLUSH]));
+            } else if app.hover == Some(i) {
+                rows.push(art::paint(&line, &[art::DIM, art::UNDERLINE]));
+            } else {
+                rows.push(art::paint(&line, &[art::SILVER]));
+            }
+            if let Ok(y) = u16::try_from(rows_start + i) {
+                hits.push(Hit {
+                    y,
+                    kind: HitKind::HireRow(i),
+                });
+            }
+        }
+    }
+    while rows.len() < avail {
+        rows.push(String::new());
+    }
+    let head = art::box_frame(&rows, "Hire", &sub, tw);
+    format!("{head}\n{runes}")
 }
 
 fn render_nest_pick(app: &App, tw: usize, _th: usize, sel: usize) -> String {

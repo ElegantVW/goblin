@@ -4,6 +4,7 @@ mod cli;
 mod compose;
 mod config;
 mod error;
+mod hire;
 mod imap;
 mod import_aerc;
 mod notify;
