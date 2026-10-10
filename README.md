@@ -63,7 +63,7 @@ goblin squeak [--set FILE]
 
 Old names (`sync`, `list`, `show`, `search`, `account`…) still work as aliases.
 
-TUI: `/` hunt · `[]` wake · `N` summon · `X` dismiss · `a` parcel.
+TUI: `/` hunt · `[]` wake · `N` summon · `X` dismiss · `a` parcel. Mouse: click selects, double-click opens, wheel scrolls (`GOBLIN_MOUSE=0` disables).
 
 Linux paths: `~/.config/goblin/`, `~/.cache/goblin/mail/{unread,read,trash}/`.
 

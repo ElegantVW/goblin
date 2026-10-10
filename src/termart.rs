@@ -20,6 +20,7 @@ pub const ERR: &str = "\x1b[38;5;197m";
 
 const ENTER_ALT: &str = "\x1b[?1049h\x1b[?25l";
 const LEAVE_ALT: &str = "\x1b[?25h\x1b[?7h\x1b[?1049l";
+const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
 const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 const TUI_HYGIENE: &str = "\x1b[0m\x1b[?25h\x1b[?7h\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 
@@ -35,6 +36,12 @@ struct Session {
 
 pub fn set_force_color(on: bool) {
     *FORCE_COLOR.lock().unwrap() = on;
+}
+
+pub fn mouse_enabled() -> bool {
+    std::env::var("GOBLIN_MOUSE")
+        .map(|v| v != "0")
+        .unwrap_or(true)
 }
 
 pub fn color_ok() -> bool {
@@ -396,6 +403,23 @@ pub fn term_height() -> usize {
 }
 
 pub fn decode_csi(s: &str) -> String {
+    // SGR mouse: <Cb;Cx;CyM (press) or <Cb;Cx;Cy m (release).
+    if let Some(rest) = s.strip_prefix('<') {
+        let press = rest.ends_with('M');
+        let nums = rest.trim_end_matches(['M', 'm']);
+        let mut it = nums.split(';');
+        if let (Some(b), Some(x), Some(y)) = (it.next(), it.next(), it.next()) {
+            if let (Ok(b), Ok(x), Ok(y)) =
+                (b.parse::<u16>(), x.parse::<u16>(), y.parse::<u16>())
+            {
+                return format!(
+                    "mouse:{b},{x},{y},{}",
+                    if press { "press" } else { "release" }
+                );
+            }
+        }
+        return format!("csi:{s}");
+    }
     if s.starts_with('A') {
         return "up".into();
     }
@@ -571,6 +595,9 @@ pub fn tui_begin(fd: RawFd, hold_name: &str) {
     let old = set_cbreak(fd).unwrap_or_else(|_| unsafe { std::mem::zeroed() });
     pixie_screen_hold(true, hold_name);
     write_raw(fd, ENTER_ALT);
+    if mouse_enabled() {
+        write_raw(fd, MOUSE_ON);
+    }
     let owned = if fd > 2 {
         Some(unsafe { OwnedFd::from_raw_fd(fd) })
     } else {
@@ -765,6 +792,15 @@ mod tests {
             assert!(top.ends_with('+'), "{top}");
             assert_eq!(vis_len(&top), 40);
         });
+    }
+
+    #[test]
+    fn sgr_mouse_decode() {
+        assert_eq!(decode_csi("<0;20;5M"), "mouse:0,20,5,press");
+        assert_eq!(decode_csi("<0;20;5m"), "mouse:0,20,5,release");
+        assert_eq!(decode_csi("<64;10;3M"), "mouse:64,10,3,press");
+        assert_eq!(decode_csi("<65;10;3M"), "mouse:65,10,3,press");
+        assert_eq!(decode_csi("<bogus"), "csi:<bogus");
     }
 
     #[test]

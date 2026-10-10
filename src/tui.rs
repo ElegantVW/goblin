@@ -86,6 +86,37 @@ struct App {
     acc_names: Vec<String>,
     query: String,
     searching: bool,
+    hits: Vec<Hit>,
+    last_click: Option<(std::time::Instant, u16, u16)>,
+}
+
+/// One clickable row, recorded at render time. Coordinates are 1-based
+/// terminal rows, matching SGR mouse reports. Rebuilt every frame.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Hit {
+    y: u16,
+    kind: HitKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HitKind {
+    /// Global index into the visible list.
+    ListRow(usize),
+    /// Reader body: click above middle scrolls up, below scrolls down.
+    ReaderBody { mid_y: u16 },
+    /// Compose header field.
+    ComposeField(Field),
+}
+
+/// Map a click row onto a list that starts at `rows_start` (1-based)
+/// showing `avail` rows from `start`. Pure, so the TUI and tests agree.
+fn row_at_y(rows_start: usize, start: usize, avail: usize, y: usize) -> Option<usize> {
+    if avail == 0 {
+        return None;
+    }
+    y.checked_sub(rows_start)
+        .filter(|off| *off < avail)
+        .map(|off| start + off)
 }
 
 pub fn run() -> Result<u8, Error> {
@@ -123,6 +154,8 @@ pub fn run() -> Result<u8, Error> {
         acc_names,
         query: String::new(),
         searching: false,
+        hits: Vec::new(),
+        last_click: None,
     };
     if app.acc_names.is_empty() {
         app.screen = Screen::NestPick { sel: 0 };
@@ -166,6 +199,8 @@ pub fn run_mend(name: Option<String>) -> Result<u8, Error> {
         acc_names,
         query: String::new(),
         searching: false,
+        hits: Vec::new(),
+        last_click: None,
     };
     app.reload();
     if let Some(n) = name {
@@ -196,18 +231,34 @@ pub fn run_mend(name: Option<String>) -> Result<u8, Error> {
 }
 
 fn event_loop(app: &mut App, fd: i32) -> Result<u8, Error> {
+    let (mut lw, mut lh) = (art::term_width(), art::term_height());
     loop {
         let frame = render(app);
         art::paint_frame(fd, &frame);
-        let key = art::tui_read_key(fd, None);
-        if handle_key(app, &key)? {
+        // Wait for a keypress or a resize; idle ticks repaint nothing.
+        loop {
+            let key = art::tui_read_key(fd, Some(200));
+            if key.is_empty() {
+                let (w, h) = (art::term_width(), art::term_height());
+                if w != lw || h != lh {
+                    lw = w;
+                    lh = h;
+                    break;
+                }
+                continue;
+            }
+            if handle_key(app, &key)? {
+                return Ok(0);
+            }
             break;
         }
     }
-    Ok(0)
 }
 
 fn handle_key(app: &mut App, key: &str) -> Result<bool, Error> {
+    if let Some(m) = key.strip_prefix("mouse:") {
+        return handle_mouse(app, m);
+    }
     match &app.screen {
         Screen::List => handle_list(app, key),
         Screen::Reader { .. } => handle_reader(app, key),
@@ -217,6 +268,76 @@ fn handle_key(app: &mut App, key: &str) -> Result<bool, Error> {
         Screen::HordePick { .. } => handle_horde_pick(app, key),
         Screen::HordeBanish { .. } => handle_horde_banish(app, key),
     }
+}
+
+/// Clicks and wheel. Releases are ignored. A second press on the same
+/// row within 400ms counts as a double-click (open); a single press
+/// only selects, so stray clicks never open, trash, or send anything.
+fn handle_mouse(app: &mut App, m: &str) -> Result<bool, Error> {
+    let mut it = m.split(',');
+    let (b, x, y, press) = match (it.next(), it.next(), it.next(), it.next()) {
+        (Some(b), Some(x), Some(y), Some(p)) => (
+            b.parse::<u16>().unwrap_or(999),
+            x.parse::<u16>().unwrap_or(0),
+            y.parse::<u16>().unwrap_or(0),
+            p == "press",
+        ),
+        _ => return Ok(false),
+    };
+    if !press {
+        return Ok(false);
+    }
+    // Wheel: 64 up, 65 down.
+    if b == 64 || b == 65 {
+        let dir: i32 = if b == 64 { -1 } else { 1 };
+        if matches!(&app.screen, Screen::List) {
+            let n = visible(app).len();
+            if n > 0 {
+                app.sel = (app.sel as i32 + dir).clamp(0, n as i32 - 1) as usize;
+            }
+        } else if let Screen::Reader { scroll, .. } = &mut app.screen {
+            if dir < 0 {
+                *scroll = scroll.saturating_sub(3);
+            } else {
+                *scroll = scroll.saturating_add(3);
+            }
+        }
+        return Ok(false);
+    }
+    if b != 0 {
+        return Ok(false);
+    }
+    let now = std::time::Instant::now();
+    let double = matches!(app.last_click, Some((t, lx, ly)) if lx == x && ly == y && now.duration_since(t).as_millis() < 400);
+    app.last_click = Some((now, x, y));
+    let hit = app.hits.iter().find(|h| h.y == y).map(|h| h.kind);
+    match hit {
+        Some(HitKind::ListRow(i)) => {
+            let n = visible(app).len();
+            if i < n {
+                app.sel = i;
+                if double {
+                    open_selected(app)?;
+                }
+            }
+        }
+        Some(HitKind::ReaderBody { mid_y }) => {
+            if let Screen::Reader { scroll, .. } = &mut app.screen {
+                if y < mid_y {
+                    *scroll = scroll.saturating_sub(1);
+                } else {
+                    *scroll = scroll.saturating_add(1);
+                }
+            }
+        }
+        Some(HitKind::ComposeField(f)) => {
+            if let Screen::Compose { draft, .. } = &mut app.screen {
+                draft.field = f;
+            }
+        }
+        None => {}
+    }
+    Ok(false)
 }
 
 fn handle_list(app: &mut App, key: &str) -> Result<bool, Error> {
@@ -1149,24 +1270,31 @@ fn trunc(s: &str, n: usize) -> String {
     art::pad_vis(s, n).trim_end().to_string()
 }
 
-fn render(app: &App) -> String {
+fn render(app: &mut App) -> String {
     let tw = art::term_width();
     let th = art::term_height();
-    match &app.screen {
-        Screen::List => render_list(app, tw, th),
-        Screen::Reader { scroll, attach_sel } => render_reader(app, tw, th, *scroll, *attach_sel),
+    // Hits live outside `app` while rendering so the frame functions
+    // can borrow the app read-only and still record click rows.
+    let mut hits = std::mem::take(&mut app.hits);
+    let frame = match &app.screen {
+        Screen::List => render_list(app, &mut hits, tw, th),
+        Screen::Reader { scroll, attach_sel } => {
+            render_reader(app, &mut hits, tw, th, *scroll, *attach_sel)
+        }
         Screen::Compose {
             draft,
             confirm_quit,
-        } => render_compose(app, tw, th, draft, *confirm_quit),
+        } => render_compose(app, &mut hits, tw, th, draft, *confirm_quit),
         Screen::NestPick { sel } => render_nest_pick(app, tw, th, *sel),
         Screen::NestForm { form } => render_nest_form(app, tw, th, form),
         Screen::HordePick { sel, why } => render_horde_pick(app, tw, *sel, *why),
         Screen::HordeBanish { name } => render_horde_banish(tw, name),
-    }
+    };
+    app.hits = hits;
+    frame
 }
 
-fn render_list(app: &App, tw: usize, th: usize) -> String {
+fn render_list(app: &App, hits: &mut Vec<Hit>, tw: usize, th: usize) -> String {
     let unread_n = app
         .store
         .load_mails(MailBox::Unread)
@@ -1201,6 +1329,19 @@ fn render_list(app: &App, tw: usize, th: usize) -> String {
         start = app.sel + 1 - avail;
     }
     let vis = visible(app);
+    // Click rows: y1 top border, then the wrapped subtitle, then the rule,
+    // so the first body row sits at (subtitle lines + 3), 1-based.
+    let body_w = tw.saturating_sub(4).max(1);
+    let sub_lines = art::wrap_plain(&art::strip_ansi(&sub), body_w).len().max(1);
+    let rows_start = sub_lines + 3;
+    for (i, _) in vis.iter().enumerate().skip(start).take(avail) {
+        if let Ok(y) = u16::try_from(rows_start + i - start) {
+            hits.push(Hit {
+                y,
+                kind: HitKind::ListRow(i),
+            });
+        }
+    }
     let mut rows: Vec<String> = Vec::new();
     if vis.is_empty() {
         rows.push(art::paint(
@@ -1246,9 +1387,16 @@ fn render_list(app: &App, tw: usize, th: usize) -> String {
     format!("{head}\n{runes}")
 }
 
-fn render_reader(app: &App, tw: usize, th: usize, scroll: usize, attach_sel: usize) -> String {
+fn render_reader(
+    app: &App,
+    hits: &mut Vec<Hit>,
+    tw: usize,
+    th: usize,
+    scroll: usize,
+    attach_sel: usize,
+) -> String {
     let Some(m) = current_mail(app) else {
-        return render_list(app, tw, th);
+        return render_list(app, hits, tw, th);
     };
     let att = if m.attachments.is_empty() {
         String::new()
@@ -1296,10 +1444,26 @@ fn render_reader(app: &App, tw: usize, th: usize, scroll: usize, attach_sel: usi
         body_rows.push(String::new());
     }
     let body = art::box_frame(&body_rows, "letter", "", tw);
+    let mid_y = u16::try_from(head_h + 1 + avail / 2).unwrap_or(u16::MAX);
+    for i in 0..avail {
+        if let Ok(y) = u16::try_from(head_h + 2 + i) {
+            hits.push(Hit {
+                y,
+                kind: HitKind::ReaderBody { mid_y },
+            });
+        }
+    }
     format!("{head}\n{body}\n{runes}")
 }
 
-fn render_compose(app: &App, tw: usize, th: usize, draft: &Draft, confirm_quit: bool) -> String {
+fn render_compose(
+    app: &App,
+    hits: &mut Vec<Hit>,
+    tw: usize,
+    th: usize,
+    draft: &Draft,
+    confirm_quit: bool,
+) -> String {
     let sub = if confirm_quit {
         "abandon this draft? y / any other key = stay".into()
     } else {
@@ -1347,6 +1511,17 @@ fn render_compose(app: &App, tw: usize, th: usize, draft: &Draft, confirm_quit: 
     if draft.field == Field::Body {
         if let Some(last) = body_rows.iter_mut().rev().find(|s| !s.is_empty()) {
             *last = art::paint(&art::strip_ansi(last), &[art::BOLD, art::BLUSH]);
+        }
+    }
+    // Header fields sit under top + wrapped subtitle + rule.
+    let body_w = tw.saturating_sub(4).max(1);
+    let sub_lines = art::wrap_plain(&art::strip_ansi(&sub), body_w).len().max(1);
+    for (i, f) in [Field::To, Field::Cc, Field::Subject].iter().enumerate() {
+        if let Ok(y) = u16::try_from(sub_lines + 3 + i) {
+            hits.push(Hit {
+                y,
+                kind: HitKind::ComposeField(*f),
+            });
         }
     }
     let body = art::box_frame(&body_rows, "letter", "", tw);
@@ -1523,6 +1698,17 @@ mod tests {
         assert!(blob.contains("work"), "{blob}");
         assert!(!blob.to_ascii_lowercase().contains("nest"), "{blob}");
         assert!(!blob.to_ascii_lowercase().contains("account"), "{blob}");
+    }
+
+    #[test]
+    fn row_at_y_maps_clicks_to_rows() {
+        // List whose first body row sits at terminal row 4, showing 10 from 5.
+        assert_eq!(row_at_y(4, 5, 10, 4), Some(5));
+        assert_eq!(row_at_y(4, 5, 10, 8), Some(9));
+        assert_eq!(row_at_y(4, 5, 10, 13), Some(14));
+        assert_eq!(row_at_y(4, 5, 10, 3), None);
+        assert_eq!(row_at_y(4, 5, 10, 14), None);
+        assert_eq!(row_at_y(4, 5, 0, 4), None);
     }
 
     #[test]
